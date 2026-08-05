@@ -55,3 +55,17 @@ func TestIdentityRejectsWeakPermissionsAndRebinding(t *testing.T) {
 		t.Fatal("weak identity permissions were accepted")
 	}
 }
+
+func TestOpaqueIdentifiersAreStableAndNamespaced(t *testing.T) {
+	identity, err := LoadOrCreate(filepath.Join(t.TempDir(), "identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := identity.OpaqueID("storage", "disk-a")
+	if first != identity.OpaqueID("storage", "disk-a") || first == identity.OpaqueID("network", "disk-a") {
+		t.Fatal("opaque identifiers are not stable and namespaced")
+	}
+	if len(first) != 64 {
+		t.Fatalf("unexpected opaque identifier length: %d", len(first))
+	}
+}

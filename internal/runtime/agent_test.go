@@ -4,9 +4,12 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +28,18 @@ func (staticCollector) Collect(_ context.Context, _ protocol.Contract) (protocol
 		CollectedAt:  time.Now().UTC(),
 		Capabilities: map[string]protocol.Capability{"host.cpu": {State: protocol.Available}},
 		Metrics:      protocol.Metrics{LoadAverage: []float64{0.1, 0.2, 0.3}},
+	}, nil
+}
+
+type oversizedCollector struct{}
+
+func (oversizedCollector) Collect(_ context.Context, _ protocol.Contract) (protocol.Heartbeat, error) {
+	services := make([]protocol.Service, 8)
+	for index := range services {
+		services[index] = protocol.Service{Name: fmt.Sprintf("service-%d", index), Description: strings.Repeat("x", 2048), ActiveState: "active"}
+	}
+	return protocol.Heartbeat{
+		CollectedAt: time.Now().UTC(), Capabilities: map[string]protocol.Capability{}, Metrics: protocol.Metrics{}, Services: services,
 	}, nil
 }
 
@@ -47,11 +62,12 @@ type runtimeServer struct {
 	fail        bool
 	sequences   []uint64
 	droppedSeen []uint64
+	replay      map[uint64]bool
 }
 
 func newRuntimeServer(t *testing.T, offlineSamples ...int) *runtimeServer {
 	t.Helper()
-	state := &runtimeServer{}
+	state := &runtimeServer{replay: map[uint64]bool{}}
 	contract := runtimeContract(t)
 	if len(offlineSamples) > 0 {
 		contract.Limits.OfflineSamples = offlineSamples[0]
@@ -70,6 +86,12 @@ func newRuntimeServer(t *testing.T, offlineSamples ...int) *runtimeServer {
 		case "/api/agent/hosts/server/1/heartbeats":
 			state.mu.Lock()
 			defer state.mu.Unlock()
+			sequence, _ := strconv.ParseUint(request.Header.Get("X-Homelab-Agent-Sequence"), 10, 64)
+			if state.replay[sequence] {
+				response.WriteHeader(http.StatusConflict)
+				_, _ = response.Write([]byte(`{"message":"already committed","code":"replayed-agent-request"}`))
+				return
+			}
 			if state.fail {
 				http.Error(response, "offline", http.StatusServiceUnavailable)
 				return
@@ -202,5 +224,50 @@ func TestAgentReportsOnlyAcknowledgedDroppedSamples(t *testing.T) {
 	server.mu.Unlock()
 	if dropped, _ := queue.Dropped(); dropped != 1 {
 		t.Fatalf("newer unreported drop was cleared: %d", dropped)
+	}
+}
+
+func TestFlushRemovesOnlyMachineConfirmedReplay(t *testing.T) {
+	server := newRuntimeServer(t)
+	defer server.server.Close()
+	agent, _, queue := createRuntime(t, server.server.URL, t.TempDir(), buffer.Limits{Samples: 60, Bytes: 10 << 20})
+	if err := agent.Activate(context.Background(), "token"); err != nil {
+		t.Fatal(err)
+	}
+	contract, err := agent.Contract(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Collect(context.Background(), contract); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	server.replay[1] = true
+	server.mu.Unlock()
+	if err := agent.Flush(context.Background()); err != nil {
+		t.Fatalf("confirmed replay remained stuck: %v", err)
+	}
+	entries, err := queue.Entries()
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("confirmed replay was not removed: %#v %v", entries, err)
+	}
+}
+
+func TestCollectEnforcesDecompressedContractLimitBeforeQueueing(t *testing.T) {
+	server := newRuntimeServer(t)
+	defer server.server.Close()
+	agent, _, queue := createRuntime(t, server.server.URL, t.TempDir(), buffer.Limits{Samples: 60, Bytes: 10 << 20})
+	if err := agent.Activate(context.Background(), "token"); err != nil {
+		t.Fatal(err)
+	}
+	agent.collector = oversizedCollector{}
+	contract := runtimeContract(t)
+	contract.Limits.DecompressedBytes = 4096
+	if err := agent.Collect(context.Background(), contract); err == nil || !strings.Contains(err.Error(), "decompressed limit") {
+		t.Fatalf("decompressed payload limit was not enforced: %v", err)
+	}
+	entries, err := queue.Entries()
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("oversized heartbeat entered the queue: %#v %v", entries, err)
 	}
 }

@@ -22,6 +22,10 @@ type Collector interface {
 	Collect(context.Context, protocol.Contract) (protocol.Heartbeat, error)
 }
 
+type backgroundCollector interface {
+	Start(context.Context, protocol.Contract)
+}
+
 type Agent struct {
 	config       config.Config
 	version      string
@@ -122,24 +126,24 @@ func (a *Agent) applyContractLimits(contract protocol.Contract) error {
 	return err
 }
 
-func compressHeartbeat(heartbeat protocol.Heartbeat) ([]byte, error) {
+func compressHeartbeat(heartbeat protocol.Heartbeat) ([]byte, int, error) {
 	body, err := json.Marshal(heartbeat)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var compressed bytes.Buffer
 	writer, err := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if _, err := writer.Write(body); err != nil {
 		_ = writer.Close()
-		return nil, err
+		return nil, 0, err
 	}
 	if err := writer.Close(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return compressed.Bytes(), nil
+	return compressed.Bytes(), len(body), nil
 }
 
 func reportedDropped(body []byte) uint64 {
@@ -184,9 +188,12 @@ func (a *Agent) Collect(ctx context.Context, contract protocol.Contract) error {
 	if err := protocol.ValidateHeartbeat(heartbeat); err != nil {
 		return err
 	}
-	body, err := compressHeartbeat(heartbeat)
+	body, decompressedBytes, err := compressHeartbeat(heartbeat)
 	if err != nil {
 		return err
+	}
+	if decompressedBytes > contract.Limits.DecompressedBytes {
+		return fmt.Errorf("heartbeat exceeds contract decompressed limit of %d bytes", contract.Limits.DecompressedBytes)
 	}
 	if len(body) > contract.Limits.CompressedBytes {
 		return fmt.Errorf("compressed heartbeat exceeds contract limit of %d bytes", contract.Limits.CompressedBytes)
@@ -202,7 +209,10 @@ func (a *Agent) Flush(ctx context.Context) error {
 	}
 	for _, entry := range entries {
 		if err := a.client.SendHeartbeat(ctx, a.config.Host, a.identity.DeviceID(), a.identity.PrivateKey(), entry.Sequence, entry.Body); err != nil {
-			return err
+			var endpointError *transport.HTTPError
+			if !errors.As(err, &endpointError) || endpointError.StatusCode != 409 || endpointError.Code != "replayed-agent-request" {
+				return err
+			}
 		}
 		if err := a.queue.Remove(entry.Sequence); err != nil {
 			return err
@@ -231,6 +241,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	contract, err := a.Contract(ctx)
 	if err != nil {
 		return err
+	}
+	if collector, ok := a.collector.(backgroundCollector); ok {
+		collector.Start(ctx, contract)
 	}
 	if err := a.Collect(ctx, contract); err != nil {
 		a.onError(err)

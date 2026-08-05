@@ -11,7 +11,7 @@ import (
 	"syscall"
 
 	"github.com/mriverodorta/homelab-inventory-agent/internal/buffer"
-	"github.com/mriverodorta/homelab-inventory-agent/internal/collectors/baseline"
+	"github.com/mriverodorta/homelab-inventory-agent/internal/collectors/platform"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/config"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/identity"
 	agentruntime "github.com/mriverodorta/homelab-inventory-agent/internal/runtime"
@@ -45,7 +45,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	collector := baseline.Collector{}
+	collector := platform.New(deviceIdentity.OpaqueID, configuration.Filesystems, configuration.StorageHealth.SMARTDevices)
 	agent, err := agentruntime.New(agentruntime.Options{
 		Config: configuration, Version: version, Capabilities: collector.Capabilities(),
 		Identity: deviceIdentity, Queue: queue, Client: client, Collector: collector,

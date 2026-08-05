@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,24 @@ func validContract() Contract {
 			OfflineSamples:    60,
 			OfflineBytes:      10485760,
 		},
+	}
+}
+
+func TestHeartbeatRejectsServerIncompatibleBounds(t *testing.T) {
+	heartbeat := validHeartbeat()
+	heartbeat.Capabilities["host.cpu"] = Capability{State: Available, Detail: strings.Repeat("x", 257)}
+	if err := ValidateHeartbeat(heartbeat); err == nil {
+		t.Fatal("oversized capability detail was accepted")
+	}
+	heartbeat = validHeartbeat()
+	heartbeat.Metrics.CPU = map[string]any{"percent": math.NaN()}
+	if err := ValidateHeartbeat(heartbeat); err == nil {
+		t.Fatal("nonfinite metric was accepted")
+	}
+	heartbeat = validHeartbeat()
+	heartbeat.Metrics.Network = make([]map[string]any, 129)
+	if err := ValidateHeartbeat(heartbeat); err == nil {
+		t.Fatal("oversized network collection was accepted")
 	}
 }
 

@@ -3,6 +3,9 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"math"
+	"reflect"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -76,6 +79,7 @@ type Activation struct {
 type Metrics struct {
 	UptimeSeconds *float64         `json:"uptimeSeconds,omitempty"`
 	LoadAverage   []float64        `json:"loadAverage,omitempty"`
+	System        map[string]any   `json:"system,omitempty"`
 	CPU           map[string]any   `json:"cpu,omitempty"`
 	Memory        map[string]any   `json:"memory,omitempty"`
 	Filesystems   []map[string]any `json:"filesystems,omitempty"`
@@ -148,6 +152,91 @@ var forbiddenContainerFields = []string{
 	"arguments", "mounts", "hostMounts", "logs", "credentials", "secrets",
 }
 
+var capabilityNamePattern = regexp.MustCompile(`^[a-z][a-z0-9.-]{0,63}$`)
+
+func validAvailability(value Availability) bool {
+	return value == Available || value == Unavailable || value == PermissionBlocked || value == Disabled
+}
+
+func validateBoundedValue(value any, depth int) error {
+	if depth > 6 {
+		return errors.New("metric value is nested too deeply")
+	}
+	if value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case string:
+		if len(typed) > 2048 {
+			return errors.New("metric string exceeds 2048 characters")
+		}
+		return nil
+	case float32:
+		if math.IsNaN(float64(typed)) || math.IsInf(float64(typed), 0) {
+			return errors.New("metric contains a nonfinite number")
+		}
+		return nil
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return errors.New("metric contains a nonfinite number")
+		}
+		return nil
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return nil
+	case reflect.Map:
+		if reflected.Len() > 128 {
+			return errors.New("metric object exceeds 128 fields")
+		}
+		iterator := reflected.MapRange()
+		for iterator.Next() {
+			if iterator.Key().Kind() != reflect.String {
+				return errors.New("metric object keys must be strings")
+			}
+			key := iterator.Key().String()
+			if key == "__proto__" || key == "constructor" || key == "prototype" {
+				return errors.New("metric object contains an unsafe key")
+			}
+			if err := validateBoundedValue(iterator.Value().Interface(), depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case reflect.Slice, reflect.Array:
+		if reflected.Len() > 1024 {
+			return errors.New("metric array exceeds 1024 values")
+		}
+		for index := 0; index < reflected.Len(); index++ {
+			if err := validateBoundedValue(reflected.Index(index).Interface(), depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case reflect.Pointer:
+		if reflected.IsNil() {
+			return nil
+		}
+		return validateBoundedValue(reflected.Elem().Interface(), depth+1)
+	case reflect.Struct:
+		typeInfo := reflected.Type()
+		for index := 0; index < reflected.NumField(); index++ {
+			field := typeInfo.Field(index)
+			if !field.IsExported() {
+				continue
+			}
+			if err := validateBoundedValue(reflected.Field(index).Interface(), depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("metric contains unsupported value type %T", value)
+	}
+}
+
 func ValidateHostRef(host HostRef) error {
 	if host.Type != HostServer && host.Type != HostNAS && host.Type != HostPCBuild {
 		return fmt.Errorf("unsupported host type %q", host.Type)
@@ -214,9 +303,74 @@ func ValidateHeartbeat(heartbeat Heartbeat) error {
 	if len(heartbeat.Hostname) > 255 || len(heartbeat.Services) > 512 || len(heartbeat.Containers) > 256 || len(heartbeat.StorageHealth) > 64 {
 		return errors.New("heartbeat collection limit exceeded")
 	}
+	if len(heartbeat.Capabilities) > 64 {
+		return errors.New("heartbeat capability limit exceeded")
+	}
+	for name, capability := range heartbeat.Capabilities {
+		if !capabilityNamePattern.MatchString(name) || !validAvailability(capability.State) || len(capability.Detail) > 256 {
+			return fmt.Errorf("capability %q is invalid", name)
+		}
+	}
+	if len(heartbeat.Metrics.LoadAverage) != 0 && len(heartbeat.Metrics.LoadAverage) != 3 {
+		return errors.New("load average must contain exactly three values")
+	}
+	for _, value := range heartbeat.Metrics.LoadAverage {
+		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return errors.New("load average is invalid")
+		}
+	}
+	metricCollections := []struct {
+		name  string
+		count int
+		limit int
+	}{
+		{name: "filesystems", count: len(heartbeat.Metrics.Filesystems), limit: 64},
+		{name: "disk I/O", count: len(heartbeat.Metrics.DiskIO), limit: 128},
+		{name: "network", count: len(heartbeat.Metrics.Network), limit: 128},
+		{name: "sensors", count: len(heartbeat.Metrics.Sensors), limit: 256},
+		{name: "batteries", count: len(heartbeat.Metrics.Batteries), limit: 16},
+		{name: "GPUs", count: len(heartbeat.Metrics.GPUs), limit: 16},
+	}
+	for _, collection := range metricCollections {
+		if collection.count > collection.limit {
+			return fmt.Errorf("heartbeat %s collection limit exceeded", collection.name)
+		}
+	}
+	if err := validateBoundedValue(heartbeat.Metrics, 0); err != nil {
+		return err
+	}
+	for _, service := range heartbeat.Services {
+		if strings.TrimSpace(service.Name) == "" || len(service.Name) > 256 || len(service.Description) > 2048 || strings.TrimSpace(service.ActiveState) == "" || len(service.ActiveState) > 64 || len(service.SubState) > 64 {
+			return errors.New("service identity fields are invalid")
+		}
+		if (service.LastResult != nil && len(*service.LastResult) > 256) ||
+			(service.ActiveEnteredAt != nil && len(*service.ActiveEnteredAt) > 128) ||
+			(service.InactiveEnteredAt != nil && len(*service.InactiveEnteredAt) > 128) ||
+			(service.CPUPercent != nil && (math.IsNaN(*service.CPUPercent) || math.IsInf(*service.CPUPercent, 0) || *service.CPUPercent < 0)) {
+			return errors.New("service telemetry fields are invalid")
+		}
+	}
 	for _, container := range heartbeat.Containers {
-		if strings.TrimSpace(container.RuntimeID) == "" || strings.TrimSpace(container.Name) == "" || strings.TrimSpace(container.Image) == "" {
+		if (container.Runtime != "docker" && container.Runtime != "podman") || strings.TrimSpace(container.RuntimeID) == "" || len(container.RuntimeID) > 128 || strings.TrimSpace(container.Name) == "" || len(container.Name) > 256 || strings.TrimSpace(container.Image) == "" || len(container.Image) > 512 || len(container.State) > 64 || len(container.PublishedPorts) > 128 {
 			return errors.New("container identity fields are required")
+		}
+		for _, port := range container.PublishedPorts {
+			if len(port) > 128 {
+				return errors.New("container published port is invalid")
+			}
+		}
+		for _, metric := range []*float64{container.CPUPercent, container.NetworkRxBytesPerSecond, container.NetworkTxBytesPerSecond, container.DiskReadBytesPerSecond, container.DiskWriteBytesPerSecond} {
+			if metric != nil && (math.IsNaN(*metric) || math.IsInf(*metric, 0) || *metric < 0) {
+				return errors.New("container metric is invalid")
+			}
+		}
+	}
+	for _, storage := range heartbeat.StorageHealth {
+		if len(storage.DeviceID) < 16 || len(storage.DeviceID) > 128 || (storage.Kind != "smart" && storage.Kind != "emmc" && storage.Kind != "mdraid") || (storage.State != "healthy" && storage.State != "warning" && storage.State != "failed" && storage.State != "unknown") || storage.CollectedAt.IsZero() {
+			return errors.New("storage-health record is invalid")
+		}
+		if err := validateBoundedValue(storage.Metrics, 0); err != nil {
+			return err
 		}
 	}
 	return nil

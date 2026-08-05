@@ -27,6 +27,7 @@ const (
 
 type HTTPError struct {
 	StatusCode int
+	Code       string
 	Message    string
 }
 
@@ -75,6 +76,7 @@ func readResponse(response *http.Response) ([]byte, error) {
 		message := strings.TrimSpace(string(body))
 		var value struct {
 			Message string `json:"message"`
+			Code    string `json:"code"`
 		}
 		if json.Unmarshal(body, &value) == nil && value.Message != "" {
 			message = value.Message
@@ -82,7 +84,7 @@ func readResponse(response *http.Response) ([]byte, error) {
 		if message == "" {
 			message = http.StatusText(response.StatusCode)
 		}
-		return nil, &HTTPError{StatusCode: response.StatusCode, Message: message}
+		return nil, &HTTPError{StatusCode: response.StatusCode, Code: value.Code, Message: message}
 	}
 	return body, nil
 }

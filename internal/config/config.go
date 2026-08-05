@@ -16,6 +16,12 @@ type Config struct {
 	Endpoint       string           `json:"endpoint"`
 	Host           protocol.HostRef `json:"host"`
 	StateDirectory string           `json:"stateDirectory"`
+	Filesystems    []string         `json:"filesystems,omitempty"`
+	StorageHealth  StorageHealth    `json:"storageHealth,omitempty"`
+}
+
+type StorageHealth struct {
+	SMARTDevices []string `json:"smartDevices,omitempty"`
 }
 
 func Load(filePath string) (Config, error) {
@@ -53,6 +59,34 @@ func (c *Config) Validate() error {
 	c.Endpoint = strings.TrimRight(parsed.String(), "/")
 	if !filepath.IsAbs(c.StateDirectory) {
 		return errors.New("stateDirectory must be an absolute path")
+	}
+	if len(c.Filesystems) > 63 {
+		return errors.New("filesystems cannot exceed 63 additional mounts")
+	}
+	seenFilesystems := map[string]struct{}{c.StateDirectory: {}}
+	for index, mount := range c.Filesystems {
+		clean := filepath.Clean(mount)
+		if !filepath.IsAbs(mount) || clean != mount || len(clean) > 4096 {
+			return fmt.Errorf("filesystems[%d] must be a normalized absolute path", index)
+		}
+		if _, duplicate := seenFilesystems[clean]; duplicate || clean == "/" {
+			return fmt.Errorf("filesystems[%d] is duplicated or reserved", index)
+		}
+		seenFilesystems[clean] = struct{}{}
+	}
+	if len(c.StorageHealth.SMARTDevices) > 64 {
+		return errors.New("smartDevices cannot exceed 64 entries")
+	}
+	seenDevices := map[string]struct{}{}
+	for index, device := range c.StorageHealth.SMARTDevices {
+		clean := filepath.Clean(device)
+		if !filepath.IsAbs(device) || clean != device || !strings.HasPrefix(clean, "/dev/") || len(clean) > 255 {
+			return fmt.Errorf("smartDevices[%d] must be a normalized absolute /dev path", index)
+		}
+		if _, duplicate := seenDevices[clean]; duplicate {
+			return fmt.Errorf("smartDevices[%d] is duplicated", index)
+		}
+		seenDevices[clean] = struct{}{}
 	}
 	return nil
 }

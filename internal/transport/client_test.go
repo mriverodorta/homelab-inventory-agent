@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -119,5 +120,22 @@ func TestActivateAndSendSignedHeartbeat(t *testing.T) {
 	_ = writer.Close()
 	if err := client.SendHeartbeat(context.Background(), protocol.HostRef{Type: protocol.HostServer, ID: 3}, 8, privateKey, 1, []byte(body.String())); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHTTPErrorPreservesMachineReadableCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusConflict)
+		_, _ = response.Write([]byte(`{"message":"already committed","code":"replayed-agent-request"}`))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = client.FetchContract(context.Background(), "")
+	var endpointError *HTTPError
+	if !errors.As(err, &endpointError) || endpointError.Code != "replayed-agent-request" || endpointError.StatusCode != 409 {
+		t.Fatalf("machine-readable endpoint error was lost: %#v %v", endpointError, err)
 	}
 }

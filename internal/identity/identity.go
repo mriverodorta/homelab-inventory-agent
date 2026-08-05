@@ -2,7 +2,9 @@ package identity
 
 import (
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -119,6 +121,16 @@ func (i *Identity) PrivateKey() ed25519.PrivateKey {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return append(ed25519.PrivateKey(nil), i.privateKey...)
+}
+
+func (i *Identity) OpaqueID(namespace, value string) string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	hash := hmac.New(sha256.New, i.privateKey.Seed())
+	_, _ = hash.Write([]byte(namespace))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(value))
+	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
 func (i *Identity) DeviceID() uint64 {
