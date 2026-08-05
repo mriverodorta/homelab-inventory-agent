@@ -54,6 +54,11 @@ func TestValidateContract(t *testing.T) {
 	if err := ValidateContract(contract); err == nil {
 		t.Fatal("raw hardware identifiers were accepted")
 	}
+	contract = validContract()
+	contract.Limits.OfflineSamples = 0
+	if err := ValidateContract(contract); err == nil {
+		t.Fatal("invalid offline buffer limit was accepted")
+	}
 }
 
 func TestValidateHeartbeat(t *testing.T) {

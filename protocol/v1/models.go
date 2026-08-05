@@ -180,6 +180,18 @@ func ValidateContract(contract Contract) error {
 	if contract.Collection.GPUSampleIntervalSeconds < 3 || contract.Collection.GPUSampleIntervalSeconds > 60 {
 		return errors.New("GPU sample interval must be between 3 and 60 seconds")
 	}
+	if contract.Limits.CompressedBytes < 1024 || contract.Limits.CompressedBytes > 1048576 {
+		return errors.New("compressed payload limit must be between 1024 and 1048576 bytes")
+	}
+	if contract.Limits.DecompressedBytes < 4096 || contract.Limits.DecompressedBytes > 4194304 {
+		return errors.New("decompressed payload limit must be between 4096 and 4194304 bytes")
+	}
+	if contract.Limits.OfflineSamples < 1 || contract.Limits.OfflineSamples > 1440 {
+		return errors.New("offline sample limit must be between 1 and 1440")
+	}
+	if contract.Limits.OfflineBytes < 1048576 || contract.Limits.OfflineBytes > 52428800 {
+		return errors.New("offline byte limit must be between 1048576 and 52428800")
+	}
 	if contract.Privacy.RawHardwareIdentifiers {
 		return errors.New("normal telemetry cannot enable raw hardware identifiers")
 	}
