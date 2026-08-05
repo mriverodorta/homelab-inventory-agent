@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homelabinventory.com/schemas/agent/v1/container.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runtime", "runtimeId", "name", "image", "state"],
+  "properties": {
+    "runtime": { "type": "string", "enum": ["docker", "podman"] },
+    "runtimeId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "image": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "imageDigest": { "type": ["string", "null"], "maxLength": 256 },
+    "state": { "type": "string", "maxLength": 64 },
+    "health": { "type": ["string", "null"], "maxLength": 64 },
+    "publishedPorts": { "type": "array", "maxItems": 128, "items": { "type": "string", "maxLength": 128 } },
+    "cpuPercent": { "type": ["number", "null"], "minimum": 0 },
+    "memoryBytes": { "type": ["integer", "null"], "minimum": 0 },
+    "networkRxBytesPerSecond": { "type": ["number", "null"], "minimum": 0 },
+    "networkTxBytesPerSecond": { "type": ["number", "null"], "minimum": 0 },
+    "diskReadBytesPerSecond": { "type": ["number", "null"], "minimum": 0 },
+    "diskWriteBytesPerSecond": { "type": ["number", "null"], "minimum": 0 }
+  }
+}

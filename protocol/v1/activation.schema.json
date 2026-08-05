@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homelabinventory.com/schemas/agent/v1/activation.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolMajor", "agentVersion", "publicKey", "capabilities"],
+  "properties": {
+    "protocolMajor": { "const": 1 },
+    "agentVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "publicKey": { "type": "string", "minLength": 56, "maxLength": 128 },
+    "capabilities": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": { "$ref": "common.schema.json#/$defs/capability" }
+    }
+  }
+}

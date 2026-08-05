@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homelabinventory.com/schemas/agent/v1/contract.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolMajor", "revision", "issuedAt", "collection", "limits", "privacy"],
+  "properties": {
+    "protocolMajor": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "collection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostIntervalSeconds", "serviceIntervalSeconds", "storageHealthIntervalSeconds", "gpuSampleIntervalSeconds"],
+      "properties": {
+        "hostIntervalSeconds": { "type": "integer", "minimum": 30, "maximum": 300 },
+        "serviceIntervalSeconds": { "type": "integer", "minimum": 300, "maximum": 3600 },
+        "storageHealthIntervalSeconds": { "type": "integer", "minimum": 1800, "maximum": 86400 },
+        "gpuSampleIntervalSeconds": { "type": "integer", "minimum": 3, "maximum": 60 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compressedBytes", "decompressedBytes", "offlineSamples", "offlineBytes"],
+      "properties": {
+        "compressedBytes": { "type": "integer", "minimum": 1024, "maximum": 1048576 },
+        "decompressedBytes": { "type": "integer", "minimum": 4096, "maximum": 4194304 },
+        "offlineSamples": { "type": "integer", "minimum": 1, "maximum": 1440 },
+        "offlineBytes": { "type": "integer", "minimum": 1048576, "maximum": 52428800 }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["containersEnabled", "smartEnabled", "rawHardwareIdentifiersEnabled"],
+      "properties": {
+        "containersEnabled": { "type": "boolean" },
+        "smartEnabled": { "type": "boolean" },
+        "rawHardwareIdentifiersEnabled": { "const": false }
+      }
+    }
+  }
+}

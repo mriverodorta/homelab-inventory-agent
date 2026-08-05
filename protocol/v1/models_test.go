@@ -1,0 +1,84 @@
+package protocol
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+func validContract() Contract {
+	return Contract{
+		ProtocolMajor: CurrentMajor,
+		Revision:      1,
+		IssuedAt:      time.Now().UTC(),
+		Collection: CollectionPolicy{
+			HostIntervalSeconds:          60,
+			ServiceIntervalSeconds:       600,
+			StorageHealthIntervalSeconds: 3600,
+			GPUSampleIntervalSeconds:     4,
+		},
+		Limits: PayloadLimits{
+			CompressedBytes:   262144,
+			DecompressedBytes: 1048576,
+			OfflineSamples:    60,
+			OfflineBytes:      10485760,
+		},
+	}
+}
+
+func validHeartbeat() Heartbeat {
+	return Heartbeat{
+		ProtocolMajor: CurrentMajor,
+		Sequence:      1,
+		AgentVersion:  "0.1.0-dev",
+		CollectedAt:   time.Now().UTC(),
+		Host:          HostRef{Type: HostServer, ID: 1},
+		Capabilities:  map[string]Capability{"host.cpu": {State: Available}},
+		Metrics:       Metrics{LoadAverage: []float64{0.1, 0.2, 0.3}},
+	}
+}
+
+func TestValidateContract(t *testing.T) {
+	contract := validContract()
+	if err := ValidateContract(contract); err != nil {
+		t.Fatalf("valid contract rejected: %v", err)
+	}
+	contract.ProtocolMajor = 2
+	if err := ValidateContract(contract); err == nil || !strings.Contains(err.Error(), "unsupported protocol major") {
+		t.Fatalf("unsupported protocol was not rejected: %v", err)
+	}
+	contract = validContract()
+	contract.Privacy.RawHardwareIdentifiers = true
+	if err := ValidateContract(contract); err == nil {
+		t.Fatal("raw hardware identifiers were accepted")
+	}
+}
+
+func TestValidateHeartbeat(t *testing.T) {
+	heartbeat := validHeartbeat()
+	if err := ValidateHeartbeat(heartbeat); err != nil {
+		t.Fatalf("valid heartbeat rejected: %v", err)
+	}
+	heartbeat.Host.Type = "desktop"
+	if err := ValidateHeartbeat(heartbeat); err == nil {
+		t.Fatal("unsupported host type was accepted")
+	}
+	heartbeat = validHeartbeat()
+	heartbeat.ProtocolMajor = 99
+	if err := ValidateHeartbeat(heartbeat); err == nil {
+		t.Fatal("unsupported protocol was accepted")
+	}
+}
+
+func TestContainerJSONCannotRepresentForbiddenFields(t *testing.T) {
+	payload, err := json.Marshal(Container{Runtime: "docker", RuntimeID: "abc", Name: "web", Image: "example/web:1", State: "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range ForbiddenContainerFields() {
+		if strings.Contains(strings.ToLower(string(payload)), `"`+strings.ToLower(field)+`"`) {
+			t.Fatalf("container payload exposed forbidden field %s", field)
+		}
+	}
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homelabinventory.com/schemas/agent/v1/common.schema.json",
+  "$defs": {
+    "hostType": {
+      "type": "string",
+      "enum": ["server", "nas", "pcBuild"]
+    },
+    "hostRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "$ref": "#/$defs/hostType" },
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "availability": {
+      "type": "string",
+      "enum": ["available", "unavailable", "permission-blocked", "disabled"]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "$ref": "#/$defs/availability" },
+        "detail": { "type": "string", "maxLength": 256 }
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homelabinventory.com/schemas/agent/v1/metrics.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "uptimeSeconds": { "type": "number", "minimum": 0 },
+    "loadAverage": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "minimum": 0 } },
+    "cpu": { "type": "object" },
+    "memory": { "type": "object" },
+    "filesystems": { "type": "array", "maxItems": 64, "items": { "type": "object" } },
+    "diskIo": { "type": "array", "maxItems": 128, "items": { "type": "object" } },
+    "network": { "type": "array", "maxItems": 128, "items": { "type": "object" } },
+    "sensors": { "type": "array", "maxItems": 256, "items": { "type": "object" } },
+    "batteries": { "type": "array", "maxItems": 16, "items": { "type": "object" } },
+    "gpus": { "type": "array", "maxItems": 16, "items": { "type": "object" } }
+  }
+}

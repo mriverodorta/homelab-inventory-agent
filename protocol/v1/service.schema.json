@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homelabinventory.com/schemas/agent/v1/service.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "activeState"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "description": { "type": "string", "maxLength": 512 },
+    "activeState": { "type": "string", "maxLength": 64 },
+    "subState": { "type": "string", "maxLength": 64 },
+    "enabled": { "type": ["boolean", "null"] },
+    "memoryCurrentBytes": { "type": ["integer", "null"], "minimum": 0 },
+    "memoryPeakBytes": { "type": ["integer", "null"], "minimum": 0 },
+    "cpuPercent": { "type": ["number", "null"], "minimum": 0 },
+    "restartCount": { "type": ["integer", "null"], "minimum": 0 },
+    "taskCount": { "type": ["integer", "null"], "minimum": 0 },
+    "taskLimit": { "type": ["integer", "null"], "minimum": 0 },
+    "lastResult": { "type": ["string", "null"], "maxLength": 128 },
+    "activeEnteredAt": { "type": ["string", "null"], "format": "date-time" },
+    "inactiveEnteredAt": { "type": ["string", "null"], "format": "date-time" }
+  }
+}

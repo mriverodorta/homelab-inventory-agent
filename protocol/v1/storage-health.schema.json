@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homelabinventory.com/schemas/agent/v1/storage-health.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deviceId", "kind", "state", "collectedAt"],
+  "properties": {
+    "deviceId": { "type": "string", "minLength": 16, "maxLength": 128 },
+    "kind": { "type": "string", "enum": ["smart", "emmc", "mdraid"] },
+    "state": { "type": "string", "enum": ["healthy", "warning", "failed", "unknown"] },
+    "collectedAt": { "type": "string", "format": "date-time" },
+    "metrics": { "type": "object", "maxProperties": 64 }
+  }
+}

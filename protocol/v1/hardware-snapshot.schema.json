@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homelabinventory.com/schemas/agent/v1/hardware-snapshot.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolMajor", "host", "collectedAt", "components"],
+  "properties": {
+    "protocolMajor": { "const": 1 },
+    "host": { "$ref": "common.schema.json#/$defs/hostRef" },
+    "collectedAt": { "type": "string", "format": "date-time" },
+    "components": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "locator", "values"],
+        "properties": {
+          "kind": { "type": "string", "maxLength": 64 },
+          "locator": { "type": "string", "maxLength": 256 },
+          "values": { "type": "object", "maxProperties": 128 }
+        }
+      }
+    }
+  }
+}
