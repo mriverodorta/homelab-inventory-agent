@@ -9,9 +9,10 @@ import (
 
 func validContract() Contract {
 	return Contract{
-		ProtocolMajor: CurrentMajor,
-		Revision:      1,
-		IssuedAt:      time.Now().UTC(),
+		ProtocolMajor:      CurrentMajor,
+		Revision:           1,
+		IssuedAt:           time.Now().UTC(),
+		SchemaBundleDigest: strings.Repeat("a", 64),
 		Collection: CollectionPolicy{
 			HostIntervalSeconds:          60,
 			ServiceIntervalSeconds:       600,

@@ -3,11 +3,12 @@
   "$id": "https://homelabinventory.com/schemas/agent/v1/contract.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["protocolMajor", "revision", "issuedAt", "collection", "limits", "privacy"],
+  "required": ["protocolMajor", "revision", "issuedAt", "schemaBundleDigest", "collection", "limits", "privacy"],
   "properties": {
     "protocolMajor": { "const": 1 },
     "revision": { "type": "integer", "minimum": 1 },
     "issuedAt": { "type": "string", "format": "date-time" },
+    "schemaBundleDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "collection": {
       "type": "object",
       "additionalProperties": false,

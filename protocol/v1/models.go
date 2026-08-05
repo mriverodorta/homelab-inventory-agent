@@ -57,12 +57,13 @@ type PrivacyPolicy struct {
 }
 
 type Contract struct {
-	ProtocolMajor int              `json:"protocolMajor"`
-	Revision      uint64           `json:"revision"`
-	IssuedAt      time.Time        `json:"issuedAt"`
-	Collection    CollectionPolicy `json:"collection"`
-	Limits        PayloadLimits    `json:"limits"`
-	Privacy       PrivacyPolicy    `json:"privacy"`
+	ProtocolMajor      int              `json:"protocolMajor"`
+	Revision           uint64           `json:"revision"`
+	IssuedAt           time.Time        `json:"issuedAt"`
+	SchemaBundleDigest string           `json:"schemaBundleDigest"`
+	Collection         CollectionPolicy `json:"collection"`
+	Limits             PayloadLimits    `json:"limits"`
+	Privacy            PrivacyPolicy    `json:"privacy"`
 }
 
 type Activation struct {
@@ -163,6 +164,9 @@ func ValidateContract(contract Contract) error {
 	}
 	if contract.Revision == 0 || contract.IssuedAt.IsZero() {
 		return errors.New("contract revision and issuedAt are required")
+	}
+	if len(contract.SchemaBundleDigest) != 64 {
+		return errors.New("contract schema bundle digest is required")
 	}
 	if contract.Collection.HostIntervalSeconds < 30 || contract.Collection.HostIntervalSeconds > 300 {
 		return errors.New("host interval must be between 30 and 300 seconds")
