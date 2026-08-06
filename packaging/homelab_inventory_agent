@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# PROVIDE: homelab_inventory_agent
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name=homelab_inventory_agent
+rcvar=homelab_inventory_agent_enable
+pidfile=/var/run/homelab-inventory-agent.pid
+command=/usr/sbin/daemon
+procname=/usr/local/sbin/homelab-inventory-agent
+command_args="-f -r -R 10 -P ${pidfile} -u homelab-inventory-agent ${procname} -config /usr/local/etc/homelab-inventory-agent/config.json"
+
+load_rc_config "$name"
+: "${homelab_inventory_agent_enable:=NO}"
+
+run_rc_command "$1"

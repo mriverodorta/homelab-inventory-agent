@@ -15,7 +15,7 @@ enrollment_code=
 upgrade=0
 
 usage() {
-  echo "usage: install.sh [--endpoint URL --host-type TYPE --host-id ID --enrollment-code CODE] [--version VERSION] [--upgrade]" >&2
+  echo "usage: install-freebsd.sh [--endpoint URL --host-type TYPE --host-id ID --enrollment-code CODE] [--version VERSION] [--upgrade]" >&2
   exit 64
 }
 
@@ -40,23 +40,33 @@ authority=${endpoint#*://}
 case "$authority" in ''|*/*|*\?*|*#*|*@*) echo "Endpoint must contain only a scheme and host." >&2; exit 64 ;; esac
 case "$version" in ''|'__HLI_AGENT_VERSION__'|.*|*..*|*[!0-9A-Za-z.-]*) echo "A valid --version is required." >&2; exit 64 ;; esac
 
-if [ -n "$INSTALL_ROOT" ] && [ -n "${HLI_TEST_OS:-}" ] && [ -n "${HLI_TEST_ARCH:-}" ]; then
+if [ -n "$INSTALL_ROOT" ] && [ -n "${HLI_TEST_OS:-}" ]; then
   os=$HLI_TEST_OS
-  arch=$HLI_TEST_ARCH
+  arch=${HLI_TEST_ARCH:-amd64}
 else
   os=$(uname -s | tr '[:upper:]' '[:lower:]')
   arch=$(uname -m)
 fi
-case "$os" in linux) ;; *) echo "This installer supports Linux only." >&2; exit 69 ;; esac
-case "$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "Unsupported architecture: $arch" >&2; exit 69 ;; esac
+[ "$os" = freebsd ] || { echo "This installer supports FreeBSD only." >&2; exit 69; }
+case "$arch" in x86_64|amd64) arch=amd64 ;; *) echo "Unsupported FreeBSD architecture: $arch" >&2; exit 69 ;; esac
+
+opnsense=0
+if [ "${HLI_TEST_OPNSENSE:-0}" = 1 ] || [ -d "$INSTALL_ROOT/usr/local/opnsense" ]; then
+  opnsense=1
+fi
+if [ "$opnsense" -eq 1 ]; then
+  runtime_state_directory=/conf/homelab-inventory-agent
+else
+  runtime_state_directory=/var/db/homelab-inventory-agent
+fi
 
 binary_path="$INSTALL_ROOT/usr/local/sbin/homelab-inventory-agent"
-config_directory="$INSTALL_ROOT/etc/homelab-inventory-agent"
+config_directory="$INSTALL_ROOT/usr/local/etc/homelab-inventory-agent"
 config_path="$config_directory/config.json"
-state_directory="$INSTALL_ROOT/var/lib/homelab-inventory-agent"
+state_directory="$INSTALL_ROOT$runtime_state_directory"
 identity_path="$state_directory/identity.json"
-service_path="$INSTALL_ROOT/etc/systemd/system/homelab-inventory-agent.service"
-filename="homelab-inventory-agent-linux-$arch"
+service_path="$INSTALL_ROOT/usr/local/etc/rc.d/homelab_inventory_agent"
+filename=homelab-inventory-agent-freebsd-amd64
 
 if [ -z "$INSTALL_ROOT" ] && [ "$(id -u)" -ne 0 ]; then
   echo "Run the installer with sudo." >&2
@@ -87,9 +97,8 @@ cleanup() {
         rm -f "$target"
       fi
     done
-    if [ -z "$INSTALL_ROOT" ] && command -v systemctl >/dev/null 2>&1; then
-      systemctl daemon-reload >/dev/null 2>&1 || true
-      systemctl restart homelab-inventory-agent.service >/dev/null 2>&1 || true
+    if [ -z "$INSTALL_ROOT" ]; then
+      service homelab_inventory_agent restart >/dev/null 2>&1 || true
     fi
   fi
   rm -f "$state_directory/.enrollment-code"
@@ -101,18 +110,13 @@ trap cleanup EXIT HUP INT TERM
 if [ -n "$ASSET_DIRECTORY" ]; then
   cp "$ASSET_DIRECTORY/$filename" "$temporary/$filename"
   cp "$ASSET_DIRECTORY/checksums.txt" "$temporary/checksums.txt"
-  cp "$ASSET_DIRECTORY/homelab-inventory-agent.service" "$temporary/service"
+  cp "$ASSET_DIRECTORY/homelab_inventory_agent" "$temporary/service"
 else
-  command -v curl >/dev/null 2>&1 || { echo "curl is required." >&2; exit 69; }
+  command -v fetch >/dev/null 2>&1 || { echo "fetch is required." >&2; exit 69; }
   asset_base="${endpoint%/}/api/agent/releases/$version"
-  if [ "${endpoint#https://}" != "$endpoint" ]; then
-    protocols='=https'
-  else
-    protocols='=http,https'
-  fi
-  curl -fsSL --proto "$protocols" --proto-redir '=https' --tlsv1.2 "$asset_base/$filename" -o "$temporary/$filename"
-  curl -fsSL --proto "$protocols" --proto-redir '=https' --tlsv1.2 "$asset_base/checksums.txt" -o "$temporary/checksums.txt"
-  curl -fsSL --proto "$protocols" --proto-redir '=https' --tlsv1.2 "$asset_base/homelab-inventory-agent.service" -o "$temporary/service"
+  fetch -q -o "$temporary/$filename" "$asset_base/$filename"
+  fetch -q -o "$temporary/checksums.txt" "$asset_base/checksums.txt"
+  fetch -q -o "$temporary/service" "$asset_base/homelab_inventory_agent"
 fi
 
 verify_checksum() {
@@ -120,18 +124,23 @@ verify_checksum() {
   path=$2
   expected=$(awk -v file="$file" '$NF == file || $NF == "*" file { print $1 }' "$temporary/checksums.txt")
   [ -n "$expected" ] || { echo "Checksum for $file is missing." >&2; exit 65; }
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual=$(sha256sum "$path" | awk '{print $1}')
-  else
-    actual=$(shasum -a 256 "$path" | awk '{print $1}')
-  fi
+  actual=$(sha256 -q "$path")
   [ "$actual" = "$expected" ] || { echo "Checksum verification failed for $file." >&2; exit 65; }
 }
 
-verify_checksum "$filename" "$temporary/$filename"
-verify_checksum homelab-inventory-agent.service "$temporary/service"
-chmod 0755 "$temporary/$filename"
-if [ -z "$INSTALL_ROOT" ] || [ "${HLI_TEST_SKIP_BINARY_EXEC:-0}" != "1" ]; then
+if [ -n "$INSTALL_ROOT" ]; then
+  actual=$(shasum -a 256 "$temporary/$filename" | awk '{print $1}')
+  expected=$(awk -v file="$filename" '$NF == file || $NF == "*" file { print $1 }' "$temporary/checksums.txt")
+  [ "$actual" = "$expected" ] || { echo "Checksum verification failed for $filename." >&2; exit 65; }
+  actual=$(shasum -a 256 "$temporary/service" | awk '{print $1}')
+  expected=$(awk '$NF == "homelab_inventory_agent" || $NF == "*homelab_inventory_agent" { print $1 }' "$temporary/checksums.txt")
+  [ "$actual" = "$expected" ] || { echo "Checksum verification failed for homelab_inventory_agent." >&2; exit 65; }
+else
+  verify_checksum "$filename" "$temporary/$filename"
+  verify_checksum homelab_inventory_agent "$temporary/service"
+fi
+chmod 0755 "$temporary/$filename" "$temporary/service"
+if [ -z "$INSTALL_ROOT" ] || [ "${HLI_TEST_SKIP_BINARY_EXEC:-0}" != 1 ]; then
   [ "$("$temporary/$filename" -version)" = "$version" ] || { echo "Agent version verification failed." >&2; exit 65; }
 fi
 
@@ -142,26 +151,26 @@ for pair in "$binary_path:binary" "$config_path:config" "$service_path:service";
 done
 
 if [ -z "$INSTALL_ROOT" ]; then
-  getent group "$SERVICE_USER" >/dev/null 2>&1 || groupadd --system "$SERVICE_USER"
-  id "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --gid "$SERVICE_USER" --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
-  systemctl stop homelab-inventory-agent.service >/dev/null 2>&1 || true
+  pw groupshow "$SERVICE_USER" >/dev/null 2>&1 || pw groupadd "$SERVICE_USER"
+  pw usershow "$SERVICE_USER" >/dev/null 2>&1 || pw useradd "$SERVICE_USER" -g "$SERVICE_USER" -d /nonexistent -s /usr/sbin/nologin -c "Homelab Inventory Agent"
+  service homelab_inventory_agent stop >/dev/null 2>&1 || true
 fi
 
 install -d -m 0755 "$(dirname "$binary_path")" "$(dirname "$service_path")"
 install -d -m 0750 "$config_directory"
 install -d -m 0700 "$state_directory"
 install -m 0755 "$temporary/$filename" "$binary_path"
-install -m 0644 "$temporary/service" "$service_path"
+install -m 0555 "$temporary/service" "$service_path"
 
 if [ "$upgrade" -eq 0 ]; then
   umask 077
   cat > "$temporary/config.json" <<EOF
-{"endpoint":"$endpoint","host":{"type":"$host_type","id":$host_id},"stateDirectory":"/var/lib/homelab-inventory-agent"}
+{"endpoint":"$endpoint","host":{"type":"$host_type","id":$host_id},"stateDirectory":"$runtime_state_directory"}
 EOF
   install -m 0640 "$temporary/config.json" "$config_path"
 fi
 
-if [ -n "$INSTALL_ROOT" ] && [ "${HLI_TEST_FAIL_AFTER_INSTALL:-0}" = "1" ]; then
+if [ -n "$INSTALL_ROOT" ] && [ "${HLI_TEST_FAIL_AFTER_INSTALL:-0}" = 1 ]; then
   echo "Injected packaging test failure." >&2
   exit 70
 fi
@@ -174,13 +183,12 @@ if [ -z "$INSTALL_ROOT" ]; then
     printf '%s\n' "$enrollment_code" > "$enrollment_file"
     chown "$SERVICE_USER:$SERVICE_USER" "$enrollment_file"
     chmod 0600 "$enrollment_file"
-    runuser -u "$SERVICE_USER" -- "$binary_path" -config "$config_path" -enrollment-code-file "$enrollment_file" -once
+    su -m "$SERVICE_USER" -c "$binary_path -config $config_path -enrollment-code-file $runtime_state_directory/.enrollment-code -once"
     rm -f "$enrollment_file"
   fi
-  systemctl daemon-reload
-  systemctl enable homelab-inventory-agent.service >/dev/null
-  systemctl restart homelab-inventory-agent.service
-  systemctl is-active --quiet homelab-inventory-agent.service
+  sysrc homelab_inventory_agent_enable=YES >/dev/null
+  service homelab_inventory_agent restart
+  service homelab_inventory_agent onestatus >/dev/null
 fi
 
 rollback=0

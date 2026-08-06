@@ -76,3 +76,21 @@ sudo ./uninstall.sh --purge
 ```
 
 The release workflow runs the race detector, vet, static analysis, vulnerability analysis, shell validation, reproducibility checks, CodeQL, SBOM generation, keyless signature generation, and build provenance attestation before publishing artifacts.
+
+## FreeBSD and OPNsense
+
+FreeBSD AMD64 uses the same signed, outbound-only protocol and one-minute heartbeat cadence. The collector reads bounded output from fixed `sysctl`, `df`, `netstat`, `iostat`, `pciconf`, `geom`, and rc.d status commands. It does not call `configctl`, inspect `/conf/config.xml`, or collect firewall, VPN, routing, gateway, CARP, or NAT state. OPNsense is treated only as a generic FreeBSD host.
+
+The normal service remains unprivileged. When FreeBSD hardening hides other users' processes, the agent reports process and per-service resource visibility as permission-blocked and omits those values instead of reporting misleading zeros. PCI and disk descriptions are sanitized before transmission; GEOM identifiers and LUN identifiers are discarded.
+
+The FreeBSD installer places files at:
+
+```text
+Binary:        /usr/local/sbin/homelab-inventory-agent
+Configuration: /usr/local/etc/homelab-inventory-agent/config.json
+Service:       /usr/local/etc/rc.d/homelab_inventory_agent
+FreeBSD state: /var/db/homelab-inventory-agent
+OPNsense state:/conf/homelab-inventory-agent
+```
+
+OPNsense detection is based on its installation directory and never reads its configuration. Identity remains under `/conf` across operating-system upgrades. Uninstall preserves configuration and identity by default; `--purge` is intentionally destructive.

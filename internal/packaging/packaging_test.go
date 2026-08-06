@@ -48,7 +48,8 @@ func TestReleaseBuildAndRootedInstaller(t *testing.T) {
 	}
 	for _, filename := range []string{
 		"homelab-inventory-agent-linux-amd64", "homelab-inventory-agent-linux-arm64", "homelab-inventory-agent-freebsd-amd64",
-		"homelab-inventory-agent.service", "install.sh", "uninstall.sh", "version.txt", "checksums.txt",
+		"homelab-inventory-agent.service", "homelab_inventory_agent", "install.sh", "install-freebsd.sh",
+		"uninstall.sh", "uninstall-freebsd.sh", "version.txt", "checksums.txt",
 	} {
 		if fileDigest(t, filepath.Join(assets, filename)) != fileDigest(t, filepath.Join(rebuilt, filename)) {
 			t.Fatalf("release artifact %s is not reproducible", filename)
@@ -93,6 +94,37 @@ func TestReleaseBuildAndRootedInstaller(t *testing.T) {
 		if !bytes.Contains(service, required) {
 			t.Fatalf("systemd unit is missing %q", required)
 		}
+	}
+}
+
+func TestFreeBSDInstallerUsesPersistentOPNsenseIdentityAndUnprivilegedRCd(t *testing.T) {
+	root := repositoryRoot(t)
+	assets := filepath.Join(t.TempDir(), "assets")
+	if output, err := run(t, root, nil, "sh", "scripts/build-release.sh", "0.1.0-test", assets); err != nil {
+		t.Fatalf("build release: %s: %v", output, err)
+	}
+	installRoot := filepath.Join(t.TempDir(), "root")
+	environment := []string{
+		"HLI_INSTALL_ROOT=" + installRoot,
+		"HLI_ASSET_DIR=" + assets,
+		"HLI_TEST_OS=freebsd",
+		"HLI_TEST_ARCH=amd64",
+		"HLI_TEST_OPNSENSE=1",
+		"HLI_TEST_SKIP_BINARY_EXEC=1",
+	}
+	output, err := run(t, root, environment, "sh", "packaging/install-freebsd.sh",
+		"--endpoint", "https://inventory.example.com", "--host-type", "server", "--host-id", "7",
+		"--enrollment-code", "one-time-code", "--version", "0.1.0-test")
+	if err != nil {
+		t.Fatalf("install FreeBSD release: %s: %v", output, err)
+	}
+	config, err := os.ReadFile(filepath.Join(installRoot, "usr/local/etc/homelab-inventory-agent/config.json"))
+	if err != nil || !bytes.Contains(config, []byte(`"stateDirectory":"/conf/homelab-inventory-agent"`)) || bytes.Contains(config, []byte("one-time-code")) {
+		t.Fatalf("OPNsense configuration is unsafe: %s %v", config, err)
+	}
+	service, err := os.ReadFile(filepath.Join(installRoot, "usr/local/etc/rc.d/homelab_inventory_agent"))
+	if err != nil || !bytes.Contains(service, []byte("-u homelab-inventory-agent")) || bytes.Contains(service, []byte("configctl")) || bytes.Contains(service, []byte("/conf/config.xml")) {
+		t.Fatalf("OPNsense rc.d service is unsafe: %s %v", service, err)
 	}
 }
 
@@ -199,6 +231,50 @@ func TestUpgradeRollbackRestoresExistingFiles(t *testing.T) {
 		body, err := os.ReadFile(path)
 		if err != nil || string(body) != expected {
 			t.Fatalf("rollback changed %s: %q %v", path, body, err)
+		}
+	}
+}
+
+func TestFreeBSDUpgradeRollbackPreservesOPNsenseIdentity(t *testing.T) {
+	root := repositoryRoot(t)
+	assets := filepath.Join(t.TempDir(), "assets")
+	if output, err := run(t, root, nil, "sh", "scripts/build-release.sh", "0.1.0-test", assets); err != nil {
+		t.Fatalf("build release: %s: %v", output, err)
+	}
+	installRoot := filepath.Join(t.TempDir(), "root")
+	binary := filepath.Join(installRoot, "usr/local/sbin/homelab-inventory-agent")
+	config := filepath.Join(installRoot, "usr/local/etc/homelab-inventory-agent/config.json")
+	identity := filepath.Join(installRoot, "conf/homelab-inventory-agent/identity.json")
+	service := filepath.Join(installRoot, "usr/local/etc/rc.d/homelab_inventory_agent")
+	for path, body := range map[string]string{
+		binary: "previous-binary", config: "previous-config", identity: "opnsense-identity", service: "previous-service",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment := []string{
+		"HLI_INSTALL_ROOT=" + installRoot,
+		"HLI_ASSET_DIR=" + assets,
+		"HLI_TEST_OS=freebsd",
+		"HLI_TEST_ARCH=amd64",
+		"HLI_TEST_OPNSENSE=1",
+		"HLI_TEST_SKIP_BINARY_EXEC=1",
+		"HLI_TEST_FAIL_AFTER_INSTALL=1",
+	}
+	if output, err := run(t, root, environment, "sh", "packaging/install-freebsd.sh",
+		"--endpoint", "https://inventory.example.com", "--version", "0.1.0-test", "--upgrade"); err == nil {
+		t.Fatalf("injected FreeBSD upgrade failure succeeded: %s", output)
+	}
+	for path, expected := range map[string]string{
+		binary: "previous-binary", config: "previous-config", identity: "opnsense-identity", service: "previous-service",
+	} {
+		body, err := os.ReadFile(path)
+		if err != nil || string(body) != expected {
+			t.Fatalf("FreeBSD rollback changed %s: %q %v", path, body, err)
 		}
 	}
 }

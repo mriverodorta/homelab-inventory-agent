@@ -2,8 +2,8 @@
 
 package platform
 
-import "github.com/mriverodorta/homelab-inventory-agent/internal/collectors/baseline"
+import freebsdcollector "github.com/mriverodorta/homelab-inventory-agent/internal/collectors/freebsd"
 
-func New(_ func(string, string) string, _, _ []string) baseline.Collector {
-	return baseline.Collector{}
+func New(_ func(string, string) string, filesystems, _ []string) *freebsdcollector.Collector {
+	return freebsdcollector.New(freebsdcollector.Options{Filesystems: filesystems})
 }
