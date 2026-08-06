@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Verify formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Static analysis
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - name: Vulnerability analysis
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Check shell packaging
+        run: shellcheck scripts/*.sh packaging/*.sh
+      - name: Build release artifacts twice
+        run: |
+          scripts/build-release.sh 0.0.0-ci dist-a
+          scripts/build-release.sh 0.0.0-ci dist-b
+          diff -rq dist-a dist-b
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: agent-ci-binaries
+          path: dist-a/
+          if-no-files-found: error

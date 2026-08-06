@@ -4,10 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/mriverodorta/homelab-inventory-agent/internal/buffer"
@@ -22,11 +24,38 @@ var version = "0.1.0-dev"
 
 func run(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("homelab-inventory-agent", flag.ContinueOnError)
+	showVersion := flags.Bool("version", false, "print the agent version and exit")
 	configPath := flags.String("config", "/etc/homelab-inventory-agent/config.json", "configuration file")
 	enrollmentCode := flags.String("enrollment-code", "", "one-time enrollment code")
+	enrollmentCodeFile := flags.String("enrollment-code-file", "", "read the one-time enrollment code from a private file")
 	once := flags.Bool("once", false, "collect and deliver one heartbeat, then exit")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *showVersion {
+		fmt.Println(version)
+		return nil
+	}
+	if *enrollmentCode != "" && *enrollmentCodeFile != "" {
+		return fmt.Errorf("provide only one enrollment-code source")
+	}
+	if *enrollmentCodeFile != "" {
+		file, err := os.Open(*enrollmentCodeFile)
+		if err != nil {
+			return fmt.Errorf("open enrollment code file: %w", err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(file, 513))
+		closeErr := file.Close()
+		if readErr != nil {
+			return fmt.Errorf("read enrollment code file: %w", readErr)
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if len(body) == 0 || len(body) > 512 {
+			return fmt.Errorf("enrollment code file must contain 1 to 512 bytes")
+		}
+		*enrollmentCode = strings.TrimSpace(string(body))
 	}
 
 	configuration, err := config.Load(*configPath)

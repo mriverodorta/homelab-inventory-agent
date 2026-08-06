@@ -1,0 +1,35 @@
+[Unit]
+Description=Homelab Inventory Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab-inventory-agent
+Group=homelab-inventory-agent
+ExecStart=/usr/local/sbin/homelab-inventory-agent -config /etc/homelab-inventory-agent/config.json
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=false
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/homelab-inventory-agent
+
+[Install]
+WantedBy=multi-user.target

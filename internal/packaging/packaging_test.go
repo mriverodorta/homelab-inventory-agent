@@ -1,0 +1,204 @@
+package packaging
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+func fileDigest(t *testing.T, path string) [32]byte {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256.Sum256(body)
+}
+
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	directory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Clean(filepath.Join(directory, "..", ".."))
+}
+
+func run(t *testing.T, directory string, environment []string, name string, arguments ...string) ([]byte, error) {
+	t.Helper()
+	command := exec.Command(name, arguments...)
+	command.Dir = directory
+	command.Env = append(os.Environ(), environment...)
+	return command.CombinedOutput()
+}
+
+func TestReleaseBuildAndRootedInstaller(t *testing.T) {
+	root := repositoryRoot(t)
+	assets := filepath.Join(t.TempDir(), "assets")
+	output, err := run(t, root, nil, "sh", "scripts/build-release.sh", "0.1.0-test", assets)
+	if err != nil {
+		t.Fatalf("build release: %s: %v", output, err)
+	}
+	rebuilt := filepath.Join(t.TempDir(), "rebuilt")
+	if output, err := run(t, root, nil, "sh", "scripts/build-release.sh", "0.1.0-test", rebuilt); err != nil {
+		t.Fatalf("repeat release build: %s: %v", output, err)
+	}
+	for _, filename := range []string{
+		"homelab-inventory-agent-linux-amd64", "homelab-inventory-agent-linux-arm64", "homelab-inventory-agent-freebsd-amd64",
+		"homelab-inventory-agent.service", "install.sh", "uninstall.sh", "version.txt", "checksums.txt",
+	} {
+		if fileDigest(t, filepath.Join(assets, filename)) != fileDigest(t, filepath.Join(rebuilt, filename)) {
+			t.Fatalf("release artifact %s is not reproducible", filename)
+		}
+	}
+	installRoot := filepath.Join(t.TempDir(), "root")
+	environment := []string{
+		"HLI_INSTALL_ROOT=" + installRoot,
+		"HLI_ASSET_DIR=" + assets,
+		"HLI_TEST_OS=linux",
+		"HLI_TEST_ARCH=amd64",
+		"HLI_TEST_SKIP_BINARY_EXEC=1",
+	}
+	output, err = run(t, root, environment, "sh", "packaging/install.sh",
+		"--endpoint", "https://inventory.example.com", "--host-type", "server", "--host-id", "7",
+		"--enrollment-code", "one-time-code", "--version", "0.1.0-test")
+	if err != nil {
+		t.Fatalf("install release: %s: %v", output, err)
+	}
+	binary := filepath.Join(installRoot, "usr/local/sbin/homelab-inventory-agent")
+	body, err := os.ReadFile(binary)
+	if err != nil || len(body) < 1024 {
+		t.Fatalf("installed binary mismatch: %d bytes %v", len(body), err)
+	}
+	config, err := os.ReadFile(filepath.Join(installRoot, "etc/homelab-inventory-agent/config.json"))
+	if err != nil || !bytes.Contains(config, []byte(`"id":7`)) || bytes.Contains(config, []byte("one-time-code")) {
+		t.Fatalf("installed configuration is unsafe: %s %v", config, err)
+	}
+	if _, err := os.Stat(filepath.Join(installRoot, "etc/systemd/system/homelab-inventory-agent.service")); err != nil {
+		t.Fatalf("systemd unit missing: %v", err)
+	}
+	service, err := os.ReadFile(filepath.Join(installRoot, "etc/systemd/system/homelab-inventory-agent.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("User=homelab-inventory-agent"),
+		[]byte("NoNewPrivileges=true"),
+		[]byte("CapabilityBoundingSet=\n"),
+		[]byte("ReadWritePaths=/var/lib/homelab-inventory-agent"),
+	} {
+		if !bytes.Contains(service, required) {
+			t.Fatalf("systemd unit is missing %q", required)
+		}
+	}
+}
+
+func TestInstallerRejectsTamperedAssets(t *testing.T) {
+	root := repositoryRoot(t)
+	assets := filepath.Join(t.TempDir(), "assets")
+	if output, err := run(t, root, nil, "sh", "scripts/build-release.sh", "0.1.0-test", assets); err != nil {
+		t.Fatalf("build release: %s: %v", output, err)
+	}
+	service := filepath.Join(assets, "homelab-inventory-agent.service")
+	if err := os.WriteFile(service, []byte("[Service]\nUser=root\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	environment := []string{
+		"HLI_INSTALL_ROOT=" + filepath.Join(t.TempDir(), "root"),
+		"HLI_ASSET_DIR=" + assets,
+		"HLI_TEST_OS=linux",
+		"HLI_TEST_ARCH=amd64",
+		"HLI_TEST_SKIP_BINARY_EXEC=1",
+	}
+	output, err := run(t, root, environment, "sh", "packaging/install.sh",
+		"--endpoint", "https://inventory.example.com", "--host-type", "server", "--host-id", "7",
+		"--enrollment-code", "one-time-code", "--version", "0.1.0-test")
+	if err == nil || !bytes.Contains(output, []byte("Checksum verification failed")) {
+		t.Fatalf("tampered asset was accepted: %s: %v", output, err)
+	}
+}
+
+func TestUpgradePreservesIdentityAndConfiguration(t *testing.T) {
+	root := repositoryRoot(t)
+	assets := filepath.Join(t.TempDir(), "assets")
+	if output, err := run(t, root, nil, "sh", "scripts/build-release.sh", "0.1.0-test", assets); err != nil {
+		t.Fatalf("build release: %s: %v", output, err)
+	}
+	installRoot := filepath.Join(t.TempDir(), "root")
+	config := filepath.Join(installRoot, "etc/homelab-inventory-agent/config.json")
+	identity := filepath.Join(installRoot, "var/lib/homelab-inventory-agent/identity.json")
+	for path, body := range map[string]string{
+		config:   `{"endpoint":"https://inventory.example.com","host":{"type":"server","id":7}}`,
+		identity: `{"privateKey":"do-not-replace"}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment := []string{
+		"HLI_INSTALL_ROOT=" + installRoot,
+		"HLI_ASSET_DIR=" + assets,
+		"HLI_TEST_OS=linux",
+		"HLI_TEST_ARCH=amd64",
+		"HLI_TEST_SKIP_BINARY_EXEC=1",
+	}
+	if output, err := run(t, root, environment, "sh", "packaging/install.sh",
+		"--endpoint", "https://ignored.example.com", "--version", "0.1.0-test", "--upgrade"); err != nil {
+		t.Fatalf("upgrade release: %s: %v", output, err)
+	}
+	for path, expected := range map[string]string{
+		config:   `{"endpoint":"https://inventory.example.com","host":{"type":"server","id":7}}`,
+		identity: `{"privateKey":"do-not-replace"}`,
+	} {
+		body, err := os.ReadFile(path)
+		if err != nil || string(body) != expected {
+			t.Fatalf("upgrade changed %s: %q %v", path, body, err)
+		}
+	}
+}
+
+func TestUpgradeRollbackRestoresExistingFiles(t *testing.T) {
+	root := repositoryRoot(t)
+	assets := filepath.Join(t.TempDir(), "assets")
+	if output, err := run(t, root, nil, "sh", "scripts/build-release.sh", "0.1.0-test", assets); err != nil {
+		t.Fatalf("build release: %s: %v", output, err)
+	}
+	installRoot := filepath.Join(t.TempDir(), "root")
+	binary := filepath.Join(installRoot, "usr/local/sbin/homelab-inventory-agent")
+	config := filepath.Join(installRoot, "etc/homelab-inventory-agent/config.json")
+	identity := filepath.Join(installRoot, "var/lib/homelab-inventory-agent/identity.json")
+	service := filepath.Join(installRoot, "etc/systemd/system/homelab-inventory-agent.service")
+	for _, path := range []string{binary, config, identity, service} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string]string{binary: "previous-binary", config: "previous-config", identity: "identity", service: "previous-service"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment := []string{
+		"HLI_INSTALL_ROOT=" + installRoot,
+		"HLI_ASSET_DIR=" + assets,
+		"HLI_TEST_OS=linux",
+		"HLI_TEST_ARCH=amd64",
+		"HLI_TEST_SKIP_BINARY_EXEC=1",
+		"HLI_TEST_FAIL_AFTER_INSTALL=1",
+	}
+	if output, err := run(t, root, environment, "sh", "packaging/install.sh", "--endpoint", "https://inventory.example.com", "--version", "0.1.0-test", "--upgrade"); err == nil {
+		t.Fatalf("injected upgrade failure succeeded: %s", output)
+	}
+	for path, expected := range map[string]string{binary: "previous-binary", config: "previous-config", service: "previous-service", identity: "identity"} {
+		body, err := os.ReadFile(path)
+		if err != nil || string(body) != expected {
+			t.Fatalf("rollback changed %s: %q %v", path, body, err)
+		}
+	}
+}
