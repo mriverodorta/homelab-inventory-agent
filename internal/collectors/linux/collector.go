@@ -21,27 +21,34 @@ type servicesCollector interface {
 	Collect(context.Context) ([]protocol.Service, error)
 }
 
+type containersCollector interface {
+	Collect(context.Context) ([]protocol.Container, error)
+	Detail() string
+}
+
 type Collector struct {
-	mu                sync.Mutex
-	root              string
-	now               func() time.Time
-	previousAt        time.Time
-	previousCPU       map[string]cpuCounters
-	previousNetwork   map[string]networkCounters
-	previousDisk      map[string]diskCounters
-	services          servicesCollector
-	lastServicesAt    time.Time
-	cachedServices    []protocol.Service
-	serviceCapability protocol.Capability
-	opaqueID          func(string, string) string
-	lastStorageAt     time.Time
-	cachedStorage     []protocol.StorageHealth
-	storageCapability protocol.Capability
-	gpu               gpuAggregation
-	filesystems       []string
-	smartDevices      []string
-	smartRunner       commandRunner
-	smartctlPath      string
+	mu                  sync.Mutex
+	root                string
+	now                 func() time.Time
+	previousAt          time.Time
+	previousCPU         map[string]cpuCounters
+	previousNetwork     map[string]networkCounters
+	previousDisk        map[string]diskCounters
+	services            servicesCollector
+	lastServicesAt      time.Time
+	cachedServices      []protocol.Service
+	serviceCapability   protocol.Capability
+	opaqueID            func(string, string) string
+	lastStorageAt       time.Time
+	cachedStorage       []protocol.StorageHealth
+	storageCapability   protocol.Capability
+	containers          containersCollector
+	containerCapability protocol.Capability
+	gpu                 gpuAggregation
+	filesystems         []string
+	smartDevices        []string
+	smartRunner         commandRunner
+	smartctlPath        string
 }
 
 type commandRunner interface {
@@ -53,6 +60,7 @@ type Options struct {
 	SMARTDevices []string
 	SMARTRunner  commandRunner
 	SMARTCTLPath string
+	Containers   containersCollector
 }
 
 func New(root string, opaqueID func(string, string) string, options ...Options) *Collector {
@@ -75,12 +83,13 @@ func New(root string, opaqueID func(string, string) string, options ...Options) 
 		services: servicecollector.NewSystemd(), opaqueID: opaqueID,
 		gpu:          newGPUAggregation(),
 		filesystems:  append([]string(nil), settings.Filesystems...),
+		containers:   settings.Containers,
 		smartDevices: append([]string(nil), settings.SMARTDevices...), smartRunner: settings.SMARTRunner, smartctlPath: settings.SMARTCTLPath,
 	}
 }
 
-func (*Collector) Capabilities() map[string]protocol.Capability {
-	return map[string]protocol.Capability{
+func (collector *Collector) Capabilities() map[string]protocol.Capability {
+	capabilities := map[string]protocol.Capability{
 		"host.uptime":      {State: protocol.Available, Detail: "procfs"},
 		"host.system":      {State: protocol.Available, Detail: "procfs and os-release"},
 		"host.load":        {State: protocol.Available, Detail: "procfs"},
@@ -96,6 +105,10 @@ func (*Collector) Capabilities() map[string]protocol.Capability {
 		"storage.health":   {State: protocol.Disabled, Detail: "storage health is opt-in or unavailable"},
 		"containers":       {State: protocol.Disabled, Detail: "container discovery is opt-in"},
 	}
+	if collector.containers != nil {
+		capabilities["containers"] = available(collector.containers.Detail())
+	}
+	return capabilities
 }
 
 func available(detail string) protocol.Capability {
@@ -193,12 +206,30 @@ func (collector *Collector) Collect(ctx context.Context, contract protocol.Contr
 	if collector.storageCapability.State != "" {
 		capabilities["storage.health"] = collector.storageCapability
 	}
+	containers := []protocol.Container(nil)
+	if collector.containers == nil {
+		capabilities["containers"] = protocol.Capability{State: protocol.Disabled, Detail: "container discovery is not configured"}
+	} else if !contract.Privacy.ContainersEnabled {
+		capabilities["containers"] = protocol.Capability{State: protocol.Disabled, Detail: "container discovery disabled by server contract"}
+	} else if collected, err := collector.containers.Collect(ctx); err != nil {
+		state := protocol.Unavailable
+		if strings.Contains(strings.ToLower(err.Error()), "permission denied") || strings.Contains(strings.ToLower(err.Error()), "access denied") {
+			state = protocol.PermissionBlocked
+		}
+		collector.containerCapability = protocol.Capability{State: state, Detail: err.Error()[:min(len(err.Error()), 256)]}
+		capabilities["containers"] = collector.containerCapability
+	} else {
+		containers = collected
+		collector.containerCapability = available(collector.containers.Detail())
+		capabilities["containers"] = collector.containerCapability
+	}
 
 	collector.previousAt = now
 	hostname, _ := os.Hostname()
 	return protocol.Heartbeat{
 		CollectedAt: now, Hostname: hostname, Capabilities: capabilities, Metrics: metrics,
 		Services:      append([]protocol.Service(nil), collector.cachedServices[:min(len(collector.cachedServices), 512)]...),
+		Containers:    append([]protocol.Container(nil), containers[:min(len(containers), 128)]...),
 		StorageHealth: append([]protocol.StorageHealth(nil), collector.cachedStorage[:min(len(collector.cachedStorage), 64)]...),
 	}, nil
 }

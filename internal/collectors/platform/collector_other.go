@@ -4,6 +4,6 @@ package platform
 
 import "github.com/mriverodorta/homelab-inventory-agent/internal/collectors/baseline"
 
-func New(_ func(string, string) string, _, _ []string) baseline.Collector {
+func New(_ func(string, string) string, _ Options) baseline.Collector {
 	return baseline.Collector{}
 }

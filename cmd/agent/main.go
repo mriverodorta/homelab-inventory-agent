@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/mriverodorta/homelab-inventory-agent/internal/buffer"
+	containercollector "github.com/mriverodorta/homelab-inventory-agent/internal/collectors/containers"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/collectors/platform"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/config"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/identity"
@@ -120,7 +121,22 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	collector := platform.New(deviceIdentity.OpaqueID, configuration.Filesystems, configuration.StorageHealth.SMARTDevices)
+	var containers *containercollector.Collector
+	if configuration.Containers.Mode != "disabled" {
+		containers, err = containercollector.New(containercollector.Options{
+			Mode:     configuration.Containers.Mode,
+			Runtime:  configuration.Containers.Runtime,
+			Endpoint: configuration.Containers.Endpoint,
+		})
+		if err != nil {
+			return fmt.Errorf("configure container collector: %w", err)
+		}
+	}
+	collector := platform.New(deviceIdentity.OpaqueID, platform.Options{
+		Filesystems:  configuration.Filesystems,
+		SMARTDevices: configuration.StorageHealth.SMARTDevices,
+		Containers:   containers,
+	})
 	agent, err := agentruntime.New(agentruntime.Options{
 		Config: configuration, Version: version, Capabilities: collector.Capabilities(),
 		Identity: deviceIdentity, Queue: queue, Client: client, Collector: collector,

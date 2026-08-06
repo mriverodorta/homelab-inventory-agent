@@ -48,3 +48,37 @@ func TestRejectsUnsafeEndpoint(t *testing.T) {
 		t.Fatal("unsafe endpoint was accepted")
 	}
 }
+
+func TestValidatesOptInContainerAccessModes(t *testing.T) {
+	base := Config{Endpoint: "https://inventory.local", StateDirectory: "/tmp"}
+	base.Host.Type = "server"
+	base.Host.ID = 1
+
+	valid := []Containers{
+		{Mode: "disabled"},
+		{Mode: "proxy", Runtime: "docker", Endpoint: "http://127.0.0.1:2375"},
+		{Mode: "socket", Runtime: "docker", Endpoint: "/var/run/docker.sock"},
+		{Mode: "socket", Runtime: "podman", Endpoint: "/run/user/10001/podman/podman.sock"},
+	}
+	for _, containers := range valid {
+		value := base
+		value.Containers = containers
+		if err := value.Validate(); err != nil {
+			t.Fatalf("valid mode rejected: %#v: %v", containers, err)
+		}
+	}
+
+	invalid := []Containers{
+		{Mode: "proxy", Runtime: "docker", Endpoint: "https://127.0.0.1:2375"},
+		{Mode: "proxy", Runtime: "docker", Endpoint: "http://docker.internal:2375"},
+		{Mode: "socket", Runtime: "docker", Endpoint: "/tmp/docker.sock"},
+		{Mode: "socket", Runtime: "containerd", Endpoint: "/var/run/docker.sock"},
+	}
+	for _, containers := range invalid {
+		value := base
+		value.Containers = containers
+		if err := value.Validate(); err == nil {
+			t.Fatalf("unsafe mode accepted: %#v", containers)
+		}
+	}
+}
