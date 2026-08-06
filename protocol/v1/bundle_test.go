@@ -34,4 +34,7 @@ func TestEmbeddedSchemasAreValidAndDigestIsStable(t *testing.T) {
 	if first != second || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(first) {
 		t.Fatalf("bundle digest is not deterministic: %q / %q", first, second)
 	}
+	if first != "da509832ec10cbe0e8bab4903627e2c46995d3dcf100735f44bbf8a4330b8d4b" {
+		t.Fatalf("canonical bundle changed without updating the pinned application contract: %q", first)
+	}
 }

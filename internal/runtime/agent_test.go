@@ -62,6 +62,7 @@ type runtimeServer struct {
 	fail        bool
 	sequences   []uint64
 	droppedSeen []uint64
+	snapshots   []protocol.HardwareSnapshot
 	replay      map[uint64]bool
 }
 
@@ -110,6 +111,17 @@ func newRuntimeServer(t *testing.T, offlineSamples ...int) *runtimeServer {
 			state.sequences = append(state.sequences, heartbeat.Sequence)
 			state.droppedSeen = append(state.droppedSeen, heartbeat.DroppedSamples)
 			_, _ = response.Write([]byte(`{"ok":true}`))
+		case "/api/agent/hosts/server/1/hardware-snapshots":
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			var snapshot protocol.HardwareSnapshot
+			if err := json.NewDecoder(request.Body).Decode(&snapshot); err != nil {
+				t.Error(err)
+				response.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			state.snapshots = append(state.snapshots, snapshot)
+			response.WriteHeader(http.StatusNoContent)
 		default:
 			http.NotFound(response, request)
 		}
@@ -269,5 +281,34 @@ func TestCollectEnforcesDecompressedContractLimitBeforeQueueing(t *testing.T) {
 	entries, err := queue.Entries()
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("oversized heartbeat entered the queue: %#v %v", entries, err)
+	}
+}
+
+func TestSubmitHardwareSnapshotUsesIdentityWithoutQueueing(t *testing.T) {
+	server := newRuntimeServer(t)
+	defer server.server.Close()
+	agent, _, queue := createRuntime(t, server.server.URL, t.TempDir(), buffer.Limits{Samples: 60, Bytes: 10 << 20})
+	if err := agent.Activate(context.Background(), "token"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := protocol.HardwareSnapshot{
+		ProtocolMajor: 1,
+		Host:          protocol.HostRef{Type: protocol.HostServer, ID: 1},
+		CollectedAt:   time.Now().UTC(),
+		Components: []protocol.HardwareComponent{{
+			Kind: "motherboard", Locator: "baseboard-1", Values: map[string]any{"serialNumber": "PRIVATE"},
+		}},
+	}
+	if err := agent.SubmitHardwareSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	if len(server.snapshots) != 1 || server.snapshots[0].Components[0].Values["serialNumber"] != "PRIVATE" {
+		t.Fatalf("snapshot was not delivered intact: %#v", server.snapshots)
+	}
+	server.mu.Unlock()
+	entries, err := queue.Entries()
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("hardware snapshot entered telemetry queue: %#v %v", entries, err)
 	}
 }

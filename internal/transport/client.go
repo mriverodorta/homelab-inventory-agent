@@ -182,24 +182,22 @@ func CanonicalRequest(method, path, timestamp string, sequence uint64, bodyDiges
 	}, "\n"))
 }
 
-func (c *Client) SendHeartbeat(ctx context.Context, host protocol.HostRef, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, compressedBody []byte) error {
-	if err := protocol.ValidateHostRef(host); err != nil {
-		return err
+func (c *Client) sendSigned(ctx context.Context, path, contentType, contentEncoding string, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, body []byte) error {
+	if deviceID == 0 || sequence == 0 || len(privateKey) != ed25519.PrivateKeySize || len(body) == 0 {
+		return errors.New("signed request input is invalid")
 	}
-	if deviceID == 0 || sequence == 0 || len(privateKey) != ed25519.PrivateKeySize || len(compressedBody) == 0 {
-		return errors.New("signed heartbeat input is invalid")
-	}
-	path := fmt.Sprintf("/api/agent/hosts/%s/%d/heartbeats", host.Type, host.ID)
 	timestamp := c.now().UTC().Format(time.RFC3339Nano)
-	digestBytes := sha256.Sum256(compressedBody)
+	digestBytes := sha256.Sum256(body)
 	digest := hex.EncodeToString(digestBytes[:])
 	signature := ed25519.Sign(privateKey, CanonicalRequest(http.MethodPost, path, timestamp, sequence, digest))
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.route(path), bytes.NewReader(compressedBody))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.route(path), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Content-Encoding", "gzip")
+	request.Header.Set("Content-Type", contentType)
+	if contentEncoding != "" {
+		request.Header.Set("Content-Encoding", contentEncoding)
+	}
 	request.Header.Set("X-Homelab-Agent-Id", strconv.FormatUint(deviceID, 10))
 	request.Header.Set("X-Homelab-Agent-Timestamp", timestamp)
 	request.Header.Set("X-Homelab-Agent-Sequence", strconv.FormatUint(sequence, 10))
@@ -211,4 +209,20 @@ func (c *Client) SendHeartbeat(ctx context.Context, host protocol.HostRef, devic
 	}
 	_, err = readResponse(response)
 	return err
+}
+
+func (c *Client) SendHeartbeat(ctx context.Context, host protocol.HostRef, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, compressedBody []byte) error {
+	if err := protocol.ValidateHostRef(host); err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/api/agent/hosts/%s/%d/heartbeats", host.Type, host.ID)
+	return c.sendSigned(ctx, path, "application/json", "gzip", deviceID, privateKey, sequence, compressedBody)
+}
+
+func (c *Client) SendHardwareSnapshot(ctx context.Context, host protocol.HostRef, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, body []byte) error {
+	if err := protocol.ValidateHostRef(host); err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/api/agent/hosts/%s/%d/hardware-snapshots", host.Type, host.ID)
+	return c.sendSigned(ctx, path, "application/json", "", deviceID, privateKey, sequence, body)
 }

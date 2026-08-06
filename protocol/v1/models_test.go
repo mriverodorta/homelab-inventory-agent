@@ -107,3 +107,27 @@ func TestContainerJSONCannotRepresentForbiddenFields(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateHardwareSnapshot(t *testing.T) {
+	snapshot := HardwareSnapshot{
+		ProtocolMajor: CurrentMajor,
+		Host:          HostRef{Type: HostServer, ID: 1},
+		CollectedAt:   time.Now().UTC(),
+		Components: []HardwareComponent{{
+			Kind: "memory", Locator: "DIMM_A1",
+			Values: map[string]any{"manufacturer": "Example", "serialNumber": "private", "sizeBytes": uint64(8 << 30)},
+		}},
+	}
+	if err := ValidateHardwareSnapshot(snapshot); err != nil {
+		t.Fatalf("valid hardware snapshot rejected: %v", err)
+	}
+	snapshot.Components[0].Values["bad"] = math.NaN()
+	if err := ValidateHardwareSnapshot(snapshot); err == nil {
+		t.Fatal("nonfinite hardware value was accepted")
+	}
+	delete(snapshot.Components[0].Values, "bad")
+	snapshot.Components[0].Kind = "../../command"
+	if err := ValidateHardwareSnapshot(snapshot); err == nil {
+		t.Fatal("unsafe hardware kind was accepted")
+	}
+}

@@ -16,13 +16,59 @@ import (
 	"github.com/mriverodorta/homelab-inventory-agent/internal/collectors/platform"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/config"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/identity"
+	"github.com/mriverodorta/homelab-inventory-agent/internal/inventoryscan"
 	agentruntime "github.com/mriverodorta/homelab-inventory-agent/internal/runtime"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/transport"
 )
 
 var version = "0.1.0-dev"
 
+var effectiveUserID = os.Geteuid
+
+func runInventory(ctx context.Context, args []string, input io.Reader, output io.Writer, scanner inventoryscan.Scanner) error {
+	flags := flag.NewFlagSet("homelab-inventory-agent inventory", flag.ContinueOnError)
+	flags.SetOutput(output)
+	configPath := flags.String("config", "/etc/homelab-inventory-agent/config.json", "configuration file")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("inventory does not accept positional arguments")
+	}
+	if effectiveUserID() != 0 {
+		return fmt.Errorf("hardware inventory requires elevated privileges; run sudo homelab-inventory-agent inventory")
+	}
+	configuration, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	if scanner == nil {
+		scanner = inventoryscan.NewScanner()
+	}
+	snapshot, err := scanner.Collect(ctx, configuration.Host)
+	if err != nil {
+		return err
+	}
+	defer inventoryscan.Clear(&snapshot)
+	confirmed, err := inventoryscan.Confirm(input, output, snapshot)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		_, _ = fmt.Fprintln(output, "Hardware snapshot was not sent.")
+		return nil
+	}
+	if err := inventoryscan.Send(ctx, inventoryscan.DefaultSocketPath, snapshot); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(output, "Hardware snapshot sent for review.")
+	return nil
+}
+
 func run(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "inventory" {
+		return runInventory(ctx, args[1:], os.Stdin, os.Stdout, nil)
+	}
 	flags := flag.NewFlagSet("homelab-inventory-agent", flag.ContinueOnError)
 	showVersion := flags.Bool("version", false, "print the agent version and exit")
 	configPath := flags.String("config", "/etc/homelab-inventory-agent/config.json", "configuration file")
@@ -94,7 +140,20 @@ func run(ctx context.Context, args []string) error {
 	if *once {
 		return agent.RunOnce(ctx)
 	}
-	return agent.Run(ctx)
+	daemonContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	inventoryServer := &inventoryscan.Server{
+		SocketPath: inventoryscan.DefaultSocketPath,
+		Host:       configuration.Host,
+		OpaqueID:   deviceIdentity.OpaqueID,
+		Submit:     agent.SubmitHardwareSnapshot,
+	}
+	result := make(chan error, 2)
+	go func() { result <- inventoryServer.ListenAndServe(daemonContext) }()
+	go func() { result <- agent.Run(daemonContext) }()
+	err = <-result
+	cancel()
+	return err
 }
 
 func main() {

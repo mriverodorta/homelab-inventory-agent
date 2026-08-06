@@ -12,6 +12,12 @@ pidfile=/var/run/homelab-inventory-agent.pid
 command=/usr/sbin/daemon
 procname=/usr/local/sbin/homelab-inventory-agent
 command_args="-f -r -R 10 -P ${pidfile} -u homelab-inventory-agent ${procname} -config /usr/local/etc/homelab-inventory-agent/config.json"
+start_precmd="homelab_inventory_agent_precmd"
+
+homelab_inventory_agent_precmd()
+{
+	install -d -m 0700 -o homelab-inventory-agent -g homelab-inventory-agent /var/run/homelab-inventory-agent
+}
 
 load_rc_config "$name"
 : "${homelab_inventory_agent_enable:=NO}"

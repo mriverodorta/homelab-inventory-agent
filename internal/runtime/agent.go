@@ -226,6 +226,32 @@ func (a *Agent) Flush(ctx context.Context) error {
 	return nil
 }
 
+func (a *Agent) SubmitHardwareSnapshot(ctx context.Context, snapshot protocol.HardwareSnapshot) error {
+	if snapshot.Host != a.config.Host {
+		return errors.New("hardware snapshot does not match the configured host")
+	}
+	if err := protocol.ValidateHardwareSnapshot(snapshot); err != nil {
+		return err
+	}
+	body, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for index := range body {
+			body[index] = 0
+		}
+	}()
+	if len(body) > 2<<20 {
+		return errors.New("hardware snapshot exceeds the transmission limit")
+	}
+	sequence, err := a.identity.ReserveSequence()
+	if err != nil {
+		return err
+	}
+	return a.client.SendHardwareSnapshot(ctx, a.config.Host, a.identity.DeviceID(), a.identity.PrivateKey(), sequence, body)
+}
+
 func (a *Agent) RunOnce(ctx context.Context) error {
 	contract, err := a.Contract(ctx)
 	if err != nil {

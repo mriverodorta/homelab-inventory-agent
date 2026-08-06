@@ -132,6 +132,19 @@ type StorageHealth struct {
 	Metrics     map[string]any `json:"metrics,omitempty"`
 }
 
+type HardwareComponent struct {
+	Kind    string         `json:"kind"`
+	Locator string         `json:"locator"`
+	Values  map[string]any `json:"values"`
+}
+
+type HardwareSnapshot struct {
+	ProtocolMajor int                 `json:"protocolMajor"`
+	Host          HostRef             `json:"host"`
+	CollectedAt   time.Time           `json:"collectedAt"`
+	Components    []HardwareComponent `json:"components"`
+}
+
 type Heartbeat struct {
 	ProtocolMajor  int                   `json:"protocolMajor"`
 	Sequence       uint64                `json:"sequence"`
@@ -153,6 +166,7 @@ var forbiddenContainerFields = []string{
 }
 
 var capabilityNamePattern = regexp.MustCompile(`^[a-z][a-z0-9.-]{0,63}$`)
+var hardwareComponentKindPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 
 func validAvailability(value Availability) bool {
 	return value == Available || value == Unavailable || value == PermissionBlocked || value == Disabled
@@ -371,6 +385,36 @@ func ValidateHeartbeat(heartbeat Heartbeat) error {
 		}
 		if err := validateBoundedValue(storage.Metrics, 0); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func ValidateHardwareSnapshot(snapshot HardwareSnapshot) error {
+	if snapshot.ProtocolMajor != CurrentMajor {
+		return fmt.Errorf("unsupported protocol major %d", snapshot.ProtocolMajor)
+	}
+	if err := ValidateHostRef(snapshot.Host); err != nil {
+		return err
+	}
+	if snapshot.CollectedAt.IsZero() {
+		return errors.New("hardware snapshot collectedAt is required")
+	}
+	if len(snapshot.Components) == 0 || len(snapshot.Components) > 1024 {
+		return errors.New("hardware snapshot must contain 1 to 1024 components")
+	}
+	for index, component := range snapshot.Components {
+		if !hardwareComponentKindPattern.MatchString(component.Kind) {
+			return fmt.Errorf("hardware component %d kind is invalid", index)
+		}
+		if strings.TrimSpace(component.Locator) == "" || len(component.Locator) > 256 {
+			return fmt.Errorf("hardware component %d locator is invalid", index)
+		}
+		if len(component.Values) == 0 || len(component.Values) > 128 {
+			return fmt.Errorf("hardware component %d values are invalid", index)
+		}
+		if err := validateBoundedValue(component.Values, 0); err != nil {
+			return fmt.Errorf("hardware component %d: %w", index, err)
 		}
 	}
 	return nil

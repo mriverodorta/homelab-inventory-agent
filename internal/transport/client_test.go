@@ -123,6 +123,45 @@ func TestActivateAndSendSignedHeartbeat(t *testing.T) {
 	}
 }
 
+func TestSendSignedHardwareSnapshot(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"protocolMajor":1,"host":{"itemType":"server","id":3},"collectedAt":"2026-08-05T12:00:00Z","components":[{"kind":"memory","locator":"DIMM_A1","values":{"sizeBytes":8589934592}}]}`)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/agent/hosts/server/3/hardware-snapshots" {
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+		if request.Header.Get("Content-Encoding") != "" || request.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("unexpected snapshot headers: %#v", request.Header)
+		}
+		received, readErr := io.ReadAll(request.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		digestBytes := sha256.Sum256(received)
+		digest := hex.EncodeToString(digestBytes[:])
+		if request.Header.Get("X-Homelab-Agent-Content-Sha256") != digest {
+			t.Fatal("snapshot digest mismatch")
+		}
+		signature, decodeErr := base64.StdEncoding.DecodeString(request.Header.Get("X-Homelab-Agent-Signature"))
+		canonical := CanonicalRequest(request.Method, request.URL.Path, request.Header.Get("X-Homelab-Agent-Timestamp"), 2, digest)
+		if decodeErr != nil || !ed25519.Verify(publicKey, canonical, signature) {
+			t.Fatal("snapshot signature is invalid")
+		}
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client, err := New(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SendHardwareSnapshot(context.Background(), protocol.HostRef{Type: protocol.HostServer, ID: 3}, 8, privateKey, 2, body); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHTTPErrorPreservesMachineReadableCode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusConflict)

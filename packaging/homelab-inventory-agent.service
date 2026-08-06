@@ -11,6 +11,8 @@ ExecStart=/usr/local/sbin/homelab-inventory-agent -config /etc/homelab-inventory
 Restart=on-failure
 RestartSec=10s
 UMask=0077
+RuntimeDirectory=homelab-inventory-agent
+RuntimeDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=false
@@ -29,7 +31,7 @@ SystemCallArchitectures=native
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/homelab-inventory-agent
+ReadWritePaths=/var/lib/homelab-inventory-agent /run/homelab-inventory-agent
 
 [Install]
 WantedBy=multi-user.target

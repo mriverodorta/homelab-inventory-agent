@@ -94,3 +94,17 @@ OPNsense state:/conf/homelab-inventory-agent
 ```
 
 OPNsense detection is based on its installation directory and never reads its configuration. Identity remains under `/conf` across operating-system upgrades. Uninstall preserves configuration and identity by default; `--purge` is intentionally destructive.
+
+## Reviewed hardware inventory
+
+The normal service never runs as root. When a user wants complete hardware identity for local matching, they can run one explicit scan:
+
+```bash
+sudo homelab-inventory-agent inventory
+```
+
+The subcommand invokes only fixed, read-only operating-system tools with strict time and output bounds. It prints a component-count summary without displaying raw serials, asks `Send this hardware snapshot? [y/N]`, and defaults to cancel. It neither loads the agent identity nor opens a network connection.
+
+After confirmation, the transient root process sends the validated snapshot through the local `inventory.sock` Unix socket and clears its in-memory model. The unprivileged daemon accepts only a local UID-0 peer, validates the snapshot a second time, derives installation-specific opaque fingerprints with its private identity, signs the request, and sends it to the configured Homelab Inventory host. Linux uses `/run/homelab-inventory-agent/inventory.sock`; FreeBSD uses `/var/run/homelab-inventory-agent/inventory.sock`.
+
+The application retains only the latest snapshot for that host. Raw serials, WWNs, and DMI identifiers are private local evidence for matching and user-reviewed field suggestions; they are never eligible for automatic registry contribution.
