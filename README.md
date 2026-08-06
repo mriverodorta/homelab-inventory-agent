@@ -2,7 +2,7 @@
 
 Homelab Inventory Agent is the independent, open-source host telemetry agent for [Homelab Inventory](https://github.com/mriverodorta/homelab-inventory).
 
-The project is under active development. It is not yet published as an installable agent release.
+The project is under active development. Homelab Inventory builds and embeds a pinned release of this source so enrolled hosts install directly from their own trusted application instance.
 
 ## Design boundaries
 
@@ -38,6 +38,25 @@ An example development configuration is:
 
 Listing a SMART device does not override the application contract. Both controls must allow SMART before the command runs.
 
+## Optional container telemetry
+
+Container collection is disabled by default. A host administrator can opt in while generating an installation command and choose either:
+
+- a credential-free Docker-compatible API proxy bound to loopback; or
+- advanced direct access to an allowlisted local Docker or Podman socket.
+
+The direct socket option grants the agent the runtime API access exposed by that socket and should be used only after reviewing that trust boundary. The collector sends only container runtime, ID, name, image/digest, state, health, published ports, and aggregate CPU, memory, network, and disk rates. It never sends environment variables, labels, commands, arguments, mounts, secrets, or raw inspect responses.
+
+```json
+{
+  "containers": {
+    "mode": "proxy",
+    "runtime": "docker",
+    "endpoint": "http://127.0.0.1:2375"
+  }
+}
+```
+
 ## Development
 
 ```bash
@@ -60,6 +79,8 @@ Release artifacts are built reproducibly for Linux AMD64, Linux ARM64, and FreeB
 scripts/build-release.sh 0.1.0 dist
 ```
 
+Each release bundle includes a machine-readable `manifest.json`, SHA-256 checksums, the canonical protocol-v1 schemas, installers, service definitions, and all supported binaries. The manifest records the exact source revision. Homelab Inventory validates every embedded byte against this manifest before exposing a release route.
+
 The Linux installer creates a dedicated `homelab-inventory-agent` system user, verifies the binary and systemd unit against the release checksum manifest, activates the agent once, and starts the hardened service. The background process has no Linux capabilities and writes only to `/var/lib/homelab-inventory-agent`.
 
 Upgrades preserve both `/etc/homelab-inventory-agent/config.json` and `/var/lib/homelab-inventory-agent/identity.json`. They replace only the verified binary and service unit, and restore the prior files if activation of the new installation fails.
@@ -75,7 +96,7 @@ sudo ./uninstall.sh
 sudo ./uninstall.sh --purge
 ```
 
-The release workflow runs the race detector, vet, static analysis, vulnerability analysis, shell validation, reproducibility checks, CodeQL, SBOM generation, keyless signature generation, and build provenance attestation before publishing artifacts.
+The release workflow runs the race detector, vet, static analysis, vulnerability analysis, shell validation, reproducibility checks, CodeQL, SBOM generation, keyless signature generation, and build provenance attestation before publishing artifacts. Agent upgrades remain manual: Homelab Inventory reports an available version and provides a verified upgrade command, but the agent never replaces itself.
 
 ## FreeBSD and OPNsense
 

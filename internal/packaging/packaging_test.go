@@ -3,6 +3,7 @@ package packaging
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,11 +50,37 @@ func TestReleaseBuildAndRootedInstaller(t *testing.T) {
 	for _, filename := range []string{
 		"homelab-inventory-agent-linux-amd64", "homelab-inventory-agent-linux-arm64", "homelab-inventory-agent-freebsd-amd64",
 		"homelab-inventory-agent.service", "homelab_inventory_agent", "install.sh", "install-freebsd.sh",
-		"uninstall.sh", "uninstall-freebsd.sh", "version.txt", "checksums.txt",
+		"uninstall.sh", "uninstall-freebsd.sh", "version.txt", "checksums.txt", "manifest.json",
 	} {
 		if fileDigest(t, filepath.Join(assets, filename)) != fileDigest(t, filepath.Join(rebuilt, filename)) {
 			t.Fatalf("release artifact %s is not reproducible", filename)
 		}
+	}
+	for _, schema := range []string{"activation", "common", "container", "contract", "hardware-snapshot", "heartbeat", "metrics", "service", "storage-health"} {
+		filename := filepath.Join("schemas", schema+".schema.json")
+		if fileDigest(t, filepath.Join(assets, filename)) != fileDigest(t, filepath.Join(rebuilt, filename)) {
+			t.Fatalf("release schema %s is not reproducible", filename)
+		}
+	}
+	manifestBody, err := os.ReadFile(filepath.Join(assets, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var releaseManifest struct {
+		Version        string `json:"version"`
+		SourceRevision string `json:"sourceRevision"`
+		ProtocolMajor  int    `json:"protocolMajor"`
+		Assets         []struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+			Bytes  int64  `json:"bytes"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal(manifestBody, &releaseManifest); err != nil {
+		t.Fatal(err)
+	}
+	if releaseManifest.Version != "0.1.0-test" || releaseManifest.SourceRevision == "" || releaseManifest.ProtocolMajor != 1 || len(releaseManifest.Assets) < 19 {
+		t.Fatalf("invalid release manifest: %#v", releaseManifest)
 	}
 	installRoot := filepath.Join(t.TempDir(), "root")
 	environment := []string{
@@ -65,7 +92,8 @@ func TestReleaseBuildAndRootedInstaller(t *testing.T) {
 	}
 	output, err = run(t, root, environment, "sh", "packaging/install.sh",
 		"--endpoint", "https://inventory.example.com", "--host-type", "server", "--host-id", "7",
-		"--enrollment-code", "one-time-code", "--version", "0.1.0-test")
+		"--enrollment-code", "one-time-code", "--version", "0.1.0-test",
+		"--containers-mode", "proxy", "--containers-runtime", "docker", "--containers-endpoint", "http://127.0.0.1:2375")
 	if err != nil {
 		t.Fatalf("install release: %s: %v", output, err)
 	}
@@ -77,6 +105,9 @@ func TestReleaseBuildAndRootedInstaller(t *testing.T) {
 	config, err := os.ReadFile(filepath.Join(installRoot, "etc/homelab-inventory-agent/config.json"))
 	if err != nil || !bytes.Contains(config, []byte(`"id":7`)) || bytes.Contains(config, []byte("one-time-code")) {
 		t.Fatalf("installed configuration is unsafe: %s %v", config, err)
+	}
+	if !bytes.Contains(config, []byte(`"containers":{"mode":"proxy","runtime":"docker","endpoint":"http://127.0.0.1:2375"}`)) {
+		t.Fatalf("container opt-in was not persisted: %s", config)
 	}
 	if _, err := os.Stat(filepath.Join(installRoot, "etc/systemd/system/homelab-inventory-agent.service")); err != nil {
 		t.Fatalf("systemd unit missing: %v", err)

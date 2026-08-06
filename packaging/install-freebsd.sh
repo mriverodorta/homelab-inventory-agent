@@ -13,9 +13,12 @@ host_type=
 host_id=
 enrollment_code=
 upgrade=0
+containers_mode=disabled
+containers_runtime=docker
+containers_endpoint=
 
 usage() {
-  echo "usage: install-freebsd.sh [--endpoint URL --host-type TYPE --host-id ID --enrollment-code CODE] [--version VERSION] [--upgrade]" >&2
+  echo "usage: install-freebsd.sh [--endpoint URL --host-type TYPE --host-id ID --enrollment-code CODE] [--version VERSION] [--containers-mode disabled|proxy|socket] [--containers-runtime docker|podman] [--containers-endpoint URL_OR_SOCKET] [--upgrade]" >&2
   exit 64
 }
 
@@ -26,6 +29,9 @@ while [ "$#" -gt 0 ]; do
     --host-type) [ "$#" -ge 2 ] || usage; host_type=$2; shift 2 ;;
     --host-id) [ "$#" -ge 2 ] || usage; host_id=$2; shift 2 ;;
     --enrollment-code) [ "$#" -ge 2 ] || usage; enrollment_code=$2; shift 2 ;;
+    --containers-mode) [ "$#" -ge 2 ] || usage; containers_mode=$2; shift 2 ;;
+    --containers-runtime) [ "$#" -ge 2 ] || usage; containers_runtime=$2; shift 2 ;;
+    --containers-endpoint) [ "$#" -ge 2 ] || usage; containers_endpoint=$2; shift 2 ;;
     --upgrade) upgrade=1; shift ;;
     *) usage ;;
   esac
@@ -39,6 +45,10 @@ case "$endpoint" in *[\"\'\\\`\$\;\|\&\<\>\(\)\{\}]*|*' '*) echo "Endpoint conta
 authority=${endpoint#*://}
 case "$authority" in ''|*/*|*\?*|*#*|*@*) echo "Endpoint must contain only a scheme and host." >&2; exit 64 ;; esac
 case "$version" in ''|'__HLI_AGENT_VERSION__'|.*|*..*|*[!0-9A-Za-z.-]*) echo "A valid --version is required." >&2; exit 64 ;; esac
+case "$containers_mode" in disabled|proxy|socket) ;; *) echo "Invalid --containers-mode." >&2; exit 64 ;; esac
+case "$containers_runtime" in docker|podman) ;; *) echo "Invalid --containers-runtime." >&2; exit 64 ;; esac
+case "$containers_endpoint" in *[\"\'\\\`\$\;\|\&\<\>\(\)\{\}]*|*' '*) echo "Container endpoint contains unsupported characters." >&2; exit 64 ;; esac
+if [ "$containers_mode" = disabled ]; then containers_endpoint=; elif [ -z "$containers_endpoint" ]; then echo "--containers-endpoint is required when container collection is enabled." >&2; exit 64; fi
 
 if [ -n "$INSTALL_ROOT" ] && [ -n "${HLI_TEST_OS:-}" ]; then
   os=$HLI_TEST_OS
@@ -165,7 +175,7 @@ install -m 0555 "$temporary/service" "$service_path"
 if [ "$upgrade" -eq 0 ]; then
   umask 077
   cat > "$temporary/config.json" <<EOF
-{"endpoint":"$endpoint","host":{"type":"$host_type","id":$host_id},"stateDirectory":"$runtime_state_directory"}
+{"endpoint":"$endpoint","host":{"type":"$host_type","id":$host_id},"stateDirectory":"$runtime_state_directory","containers":{"mode":"$containers_mode","runtime":"$containers_runtime","endpoint":"$containers_endpoint"}}
 EOF
   install -m 0640 "$temporary/config.json" "$config_path"
 fi
