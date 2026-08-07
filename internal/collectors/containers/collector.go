@@ -9,7 +9,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,14 +40,32 @@ type counters struct {
 }
 
 type Collector struct {
-	mode     string
-	runtime  string
-	baseURL  string
-	client   *http.Client
-	mu       sync.Mutex
-	previous map[string]counters
-	now      func() time.Time
+	mode               string
+	runtime            string
+	baseURL            string
+	client             *http.Client
+	mu                 sync.Mutex
+	previous           map[string]counters
+	now                func() time.Time
+	apiPrefix          string
+	apiVersionResolved bool
 }
+
+type runtimeHTTPError struct {
+	status int
+	body   string
+}
+
+func (err *runtimeHTTPError) Error() string {
+	return fmt.Sprintf("container runtime returned HTTP %d", err.status)
+}
+
+type runtimeVersion struct {
+	APIVersion    string `json:"ApiVersion"`
+	MinAPIVersion string `json:"MinAPIVersion"`
+}
+
+var apiVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
 
 type listContainer struct {
 	ID      string   `json:"Id"`
@@ -148,11 +168,11 @@ func (collector *Collector) getJSON(ctx context.Context, path string, target any
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusUnauthorized {
 			return fmt.Errorf("container runtime access denied with HTTP %d", response.StatusCode)
 		}
-		return fmt.Errorf("container runtime returned HTTP %d", response.StatusCode)
+		return &runtimeHTTPError{status: response.StatusCode, body: string(body)}
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, maximumBodyBytes+1))
 	if err := decoder.Decode(target); err != nil {
@@ -161,11 +181,73 @@ func (collector *Collector) getJSON(ctx context.Context, path string, target any
 	return nil
 }
 
+func parseAPIVersion(value string) ([2]uint64, bool) {
+	if !apiVersionPattern.MatchString(value) {
+		return [2]uint64{}, false
+	}
+	parts := strings.Split(value, ".")
+	major, majorErr := strconv.ParseUint(parts[0], 10, 32)
+	minor, minorErr := strconv.ParseUint(parts[1], 10, 32)
+	if majorErr != nil || minorErr != nil {
+		return [2]uint64{}, false
+	}
+	return [2]uint64{major, minor}, true
+}
+
+func compareAPIVersions(first, second [2]uint64) int {
+	if first[0] < second[0] || first[0] == second[0] && first[1] < second[1] {
+		return -1
+	}
+	if first == second {
+		return 0
+	}
+	return 1
+}
+
+func (collector *Collector) resolveAPIPrefix(ctx context.Context) string {
+	if collector.apiVersionResolved {
+		return collector.apiPrefix
+	}
+	collector.apiVersionResolved = true
+	collector.apiPrefix = ""
+	var version runtimeVersion
+	if err := collector.getJSON(ctx, "/version", &version); err != nil {
+		return ""
+	}
+	current, currentValid := parseAPIVersion(version.APIVersion)
+	minimum, minimumValid := parseAPIVersion(version.MinAPIVersion)
+	if !currentValid || !minimumValid || compareAPIVersions(current, minimum) < 0 {
+		return ""
+	}
+	collector.apiPrefix = "/v" + version.APIVersion
+	return collector.apiPrefix
+}
+
+func isAPIVersionMismatch(err error) bool {
+	var responseError *runtimeHTTPError
+	if !errors.As(err, &responseError) || responseError.status != http.StatusBadRequest {
+		return false
+	}
+	message := strings.ToLower(responseError.body)
+	return strings.Contains(message, "client version") || strings.Contains(message, "api version")
+}
+
+func (collector *Collector) getRuntimeJSON(ctx context.Context, path string, target any) error {
+	prefix := collector.resolveAPIPrefix(ctx)
+	err := collector.getJSON(ctx, prefix+path, target)
+	if prefix == "" || !isAPIVersionMismatch(err) {
+		return err
+	}
+	collector.apiVersionResolved = false
+	collector.apiPrefix = ""
+	return collector.getJSON(ctx, collector.resolveAPIPrefix(ctx)+path, target)
+}
+
 func (collector *Collector) Collect(ctx context.Context) ([]protocol.Container, error) {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	var listed []listContainer
-	if err := collector.getJSON(ctx, "/v1.41/containers/json?all=0", &listed); err != nil {
+	if err := collector.getRuntimeJSON(ctx, "/containers/json?all=0", &listed); err != nil {
 		return nil, err
 	}
 	if len(listed) > maximumContainers {
@@ -197,7 +279,7 @@ func (collector *Collector) Collect(ctx context.Context) ([]protocol.Container, 
 			container.Health = &health
 		}
 		var stats statsPayload
-		if err := collector.getJSON(ctx, "/v1.41/containers/"+url.PathEscape(listedContainer.ID)+"/stats?stream=false&one-shot=true", &stats); err == nil {
+		if err := collector.getRuntimeJSON(ctx, "/containers/"+url.PathEscape(listedContainer.ID)+"/stats?stream=false&one-shot=true", &stats); err == nil {
 			applyStats(&container, stats, collector.previous[listedContainer.ID], now)
 			collector.previous[listedContainer.ID] = statsCounters(stats, now)
 		}

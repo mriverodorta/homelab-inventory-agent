@@ -15,7 +15,12 @@ import (
 
 func runtimeHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1.41/containers/json", func(response http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("/version", func(response http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"Version": "29.1.3", "ApiVersion": "1.52", "MinAPIVersion": "1.44",
+		})
+	})
+	mux.HandleFunc("/v1.52/containers/json", func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Query().Get("all") != "0" {
 			http.Error(response, "invalid all value", http.StatusBadRequest)
 			return
@@ -28,7 +33,7 @@ func runtimeHandler() http.Handler {
 			"Command": []string{"server", "--token", "secret"}, "Mounts": []string{"/private"},
 		}})
 	})
-	mux.HandleFunc("/v1.41/containers/abcdef0123456789/stats", func(response http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/v1.52/containers/abcdef0123456789/stats", func(response http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(response).Encode(map[string]any{
 			"cpu_stats":    map[string]any{"cpu_usage": map[string]any{"total_usage": 200, "percpu_usage": []int{100, 100}}, "system_cpu_usage": 1000, "online_cpus": 2},
 			"precpu_stats": map[string]any{"cpu_usage": map[string]any{"total_usage": 100}, "system_cpu_usage": 500},
@@ -39,6 +44,94 @@ func runtimeHandler() http.Handler {
 		})
 	})
 	return mux
+}
+
+func TestCollectorNegotiatesAndCachesTheAdvertisedRuntimeAPI(t *testing.T) {
+	versionRequests := 0
+	mux := runtimeHandler().(*http.ServeMux)
+	mux.HandleFunc("GET /negotiation-count", func(response http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(response).Encode(versionRequests)
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/version" {
+			versionRequests++
+		}
+		mux.ServeHTTP(response, request)
+	}))
+	defer server.Close()
+	collector, err := New(Options{Mode: "proxy", Runtime: "docker", Endpoint: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collector.Collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collector.Collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if versionRequests != 1 {
+		t.Fatalf("runtime API was negotiated %d times", versionRequests)
+	}
+}
+
+func TestCollectorFallsBackToUnversionedRoutesWhenVersionMetadataIsInvalid(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/version", func(response http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(response).Encode(map[string]any{"ApiVersion": "not-a-version", "MinAPIVersion": "1.44"})
+	})
+	mux.HandleFunc("/containers/json", func(response http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(response).Encode([]map[string]any{})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	collector, err := New(Options{Mode: "proxy", Runtime: "docker", Endpoint: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	containers, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) != 0 {
+		t.Fatalf("unexpected containers: %#v", containers)
+	}
+}
+
+func TestCollectorRenegotiatesOnceAfterDockerRaisesItsMinimumVersion(t *testing.T) {
+	versionRequests := 0
+	listRequests := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/version", func(response http.ResponseWriter, _ *http.Request) {
+		versionRequests++
+		version := "1.41"
+		minimum := "1.24"
+		if versionRequests > 1 {
+			version = "1.52"
+			minimum = "1.44"
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{"ApiVersion": version, "MinAPIVersion": minimum})
+	})
+	mux.HandleFunc("/v1.41/containers/json", func(response http.ResponseWriter, _ *http.Request) {
+		listRequests++
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(`{"message":"client version 1.41 is too old"}`))
+	})
+	mux.HandleFunc("/v1.52/containers/json", func(response http.ResponseWriter, _ *http.Request) {
+		listRequests++
+		_ = json.NewEncoder(response).Encode([]map[string]any{})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	collector, err := New(Options{Mode: "proxy", Runtime: "docker", Endpoint: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collector.Collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if versionRequests != 2 || listRequests != 2 {
+		t.Fatalf("unexpected bounded negotiation counts: versions=%d lists=%d", versionRequests, listRequests)
+	}
 }
 
 func TestProxyCollectorAllowsOnlySanitizedContainerFields(t *testing.T) {

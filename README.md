@@ -47,6 +47,8 @@ Container collection is disabled by default. A host administrator can opt in whi
 
 The direct socket option grants the agent the runtime API access exposed by that socket and should be used only after reviewing that trust boundary. The collector sends only container runtime, ID, name, image/digest, state, health, published ports, and aggregate CPU, memory, network, and disk rates. It never sends environment variables, labels, commands, arguments, mounts, secrets, or raw inspect responses.
 
+For Docker-compatible HTTP proxies, the agent reads the runtime's `/version` response and uses an API version within the daemon-advertised supported range. It does not assume a fixed Docker API version, and it renegotiates once if the daemon's supported range changes while the agent is running.
+
 ```json
 {
   "containers": {
