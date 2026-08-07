@@ -5,9 +5,12 @@ package platform
 import "github.com/mriverodorta/homelab-inventory-agent/internal/collectors/linux"
 
 func New(opaqueID func(string, string) string, options Options) *linux.Collector {
-	return linux.New("/", opaqueID, linux.Options{
+	settings := linux.Options{
 		Filesystems:  options.Filesystems,
 		SMARTDevices: options.SMARTDevices,
-		Containers:   options.Containers,
-	})
+	}
+	if options.Containers != nil {
+		settings.Containers = options.Containers
+	}
+	return linux.New("/", opaqueID, settings)
 }
