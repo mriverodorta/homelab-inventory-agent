@@ -38,6 +38,8 @@ jobs:
           scripts/build-release.sh "${{ steps.version.outputs.value }}" dist
           scripts/build-release.sh "${{ steps.version.outputs.value }}" dist-rebuilt
           diff -rq dist dist-rebuilt
+      - name: Test Ubuntu installation transaction
+        run: scripts/test-ubuntu-install.sh "${{ steps.version.outputs.value }}"
       - uses: anchore/sbom-action@v0.24.0
         with:
           path: dist

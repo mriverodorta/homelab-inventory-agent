@@ -107,6 +107,13 @@ cleanup() {
         rm -f "$target"
       fi
     done
+    if [ -f "$temporary/state.transaction" ]; then
+      rm -rf "$state_directory"
+      if [ -d "$temporary/state.previous" ]; then
+        install -d -m 0755 "$(dirname "$state_directory")"
+        cp -Rp "$temporary/state.previous" "$state_directory"
+      fi
+    fi
     if [ -z "$INSTALL_ROOT" ]; then
       service homelab_inventory_agent restart >/dev/null 2>&1 || true
     fi
@@ -164,6 +171,14 @@ if [ -z "$INSTALL_ROOT" ]; then
   pw groupshow "$SERVICE_USER" >/dev/null 2>&1 || pw groupadd "$SERVICE_USER"
   pw usershow "$SERVICE_USER" >/dev/null 2>&1 || pw useradd "$SERVICE_USER" -g "$SERVICE_USER" -d /nonexistent -s /usr/sbin/nologin -c "Homelab Inventory Agent"
   service homelab_inventory_agent stop >/dev/null 2>&1 || true
+fi
+
+if [ -d "$state_directory" ]; then
+  cp -Rp "$state_directory" "$temporary/state.previous"
+fi
+: > "$temporary/state.transaction"
+if [ "$upgrade" -eq 0 ]; then
+  rm -rf "$state_directory"
 fi
 
 install -d -m 0755 "$(dirname "$binary_path")" "$(dirname "$service_path")"

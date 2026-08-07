@@ -29,6 +29,8 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - name: Check shell packaging
         run: shellcheck scripts/*.sh packaging/*.sh
+      - name: Test Ubuntu installation transaction
+        run: scripts/test-ubuntu-install.sh 0.0.0-ci
       - name: Build release artifacts twice
         run: |
           scripts/build-release.sh 0.0.0-ci dist-a
