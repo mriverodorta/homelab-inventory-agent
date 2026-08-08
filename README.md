@@ -18,7 +18,7 @@ The capability baseline was informed by an implementation review of Beszel v0.18
 
 ## Current Linux telemetry
 
-The Linux collector reads procfs, sysfs, `statfs`, and a bounded `systemctl show` projection. It reports CPU totals and per-core deltas, CPU state breakdown, load, memory and swap, ZFS ARC, root and configured filesystems, disk I/O, aggregate and per-interface network traffic, temperature sensors, batteries, systemd services, and safe DRM GPU metrics. GPU readings are sampled in memory at the contract cadence and averaged into the normal one-minute heartbeat; no high-frequency series is transmitted or persisted.
+The Linux collector reads procfs, sysfs, `statfs`, and a bounded `systemctl show` projection. It reports CPU totals and per-core deltas, CPU state breakdown, load, memory and swap, ZFS ARC, root and configured filesystems, disk I/O, aggregate and per-interface network traffic, temperature sensors, batteries, systemd services, and safe DRM GPU metrics. Service records identify locally installed or manually installed units separately from operating-system units when the host exposes enough package ownership data. GPU readings are sampled in memory at the contract cadence and averaged into the normal one-minute heartbeat; no high-frequency series is transmitted or persisted.
 
 eMMC and mdraid health use read-only sysfs. SMART is collected only when the application contract enables it and the local configuration explicitly allowlists normalized `/dev/...` paths. The fixed `smartctl -n standby,0 -a -j` invocation has a timeout and output limit and does not wake standby disks. Serial numbers and WWNs are discarded; device references are installation-specific HMAC identifiers.
 
@@ -45,7 +45,7 @@ Container collection is disabled by default. A host administrator can opt in whi
 - a credential-free Docker-compatible API proxy bound to loopback; or
 - advanced direct access to an allowlisted local Docker or Podman socket.
 
-The direct socket option grants the agent the runtime API access exposed by that socket and should be used only after reviewing that trust boundary. The collector sends only container runtime, ID, name, image/digest, state, health, published ports, and aggregate CPU, memory, network, and disk rates. It never sends environment variables, labels, commands, arguments, mounts, secrets, or raw inspect responses.
+The direct socket option grants the agent the runtime API access exposed by that socket and should be used only after reviewing that trust boundary. The collector sends only container runtime, ID, name, image/digest, state, health, uptime, the allowlisted Compose service value, published port mappings, network mode and names, and aggregate CPU, memory, network, and disk rates. It never sends arbitrary labels, environment variables, commands, arguments, mounts, secrets, IP or MAC addresses, or raw inspect responses.
 
 For Docker-compatible HTTP proxies, the agent reads the runtime's `/version` response and uses an API version within the daemon-advertised supported range. It does not assume a fixed Docker API version, and it renegotiates once if the daemon's supported range changes while the agent is running.
 
