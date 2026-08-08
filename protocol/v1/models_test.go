@@ -94,6 +94,15 @@ func TestValidateHeartbeat(t *testing.T) {
 	if err := ValidateHeartbeat(heartbeat); err == nil {
 		t.Fatal("unsupported protocol was accepted")
 	}
+	heartbeat = validHeartbeat()
+	heartbeat.Services = []Service{{Name: "docker", ActiveState: "active", Classification: "user-installed"}}
+	if err := ValidateHeartbeat(heartbeat); err != nil {
+		t.Fatalf("valid service classification rejected: %v", err)
+	}
+	heartbeat.Services[0].Classification = "third-party"
+	if err := ValidateHeartbeat(heartbeat); err == nil {
+		t.Fatal("unsupported service classification was accepted")
+	}
 }
 
 func TestContainerJSONCannotRepresentForbiddenFields(t *testing.T) {

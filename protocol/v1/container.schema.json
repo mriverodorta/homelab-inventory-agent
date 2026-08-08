@@ -11,7 +11,30 @@
     "image": { "type": "string", "minLength": 1, "maxLength": 512 },
     "imageDigest": { "type": ["string", "null"], "maxLength": 256 },
     "state": { "type": "string", "maxLength": 64 },
+    "status": { "type": "string", "maxLength": 256 },
+    "uptime": { "type": "string", "maxLength": 128 },
     "health": { "type": ["string", "null"], "maxLength": 64 },
+    "composeService": { "type": "string", "maxLength": 256 },
+    "networkMode": { "type": "string", "enum": ["host", "bridge", "none", "custom"] },
+    "networkNames": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "ports": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hostPort", "containerPort", "protocol"],
+        "properties": {
+          "hostPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "containerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "protocol": { "type": "string", "enum": ["tcp", "udp", "sctp"] }
+        }
+      }
+    },
     "publishedPorts": { "type": "array", "maxItems": 128, "items": { "type": "string", "maxLength": 128 } },
     "cpuPercent": { "type": ["number", "null"], "minimum": 0 },
     "memoryBytes": { "type": ["integer", "null"], "minimum": 0 },

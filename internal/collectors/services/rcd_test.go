@@ -43,6 +43,11 @@ func TestRCdCollectsEnabledServicesWithoutProcessInspection(t *testing.T) {
 		t.Fatalf("unexpected rc.d services: %#v", services)
 	}
 	for _, service := range services {
+		if service.Classification != "user-installed" {
+			t.Fatalf("local rc.d service was not classified as user-installed: %#v", service)
+		}
+	}
+	for _, service := range services {
 		if service.MemoryCurrent != nil || service.CPUPercent != nil || service.TaskCount != nil {
 			t.Fatalf("hidden process resources were overstated: %#v", service)
 		}
@@ -51,6 +56,15 @@ func TestRCdCollectsEnabledServicesWithoutProcessInspection(t *testing.T) {
 		if strings.Contains(call, "ps ") || strings.Contains(call, "procstat") || strings.Contains(call, "sockstat") {
 			t.Fatalf("rc.d collector inspected processes: %s", call)
 		}
+	}
+}
+
+func TestRCdClassifiesBaseAndUnknownPaths(t *testing.T) {
+	if classifyRCdPath("/etc/rc.d/cron") != "system" {
+		t.Fatal("base rc.d service was not classified as system")
+	}
+	if classifyRCdPath("/opt/example/service") != "unknown" {
+		t.Fatal("nonstandard rc.d service was not classified as unknown")
 	}
 }
 

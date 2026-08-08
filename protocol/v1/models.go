@@ -94,6 +94,7 @@ type Service struct {
 	Name              string   `json:"name"`
 	Description       string   `json:"description,omitempty"`
 	ActiveState       string   `json:"activeState"`
+	Classification    string   `json:"classification,omitempty"`
 	SubState          string   `json:"subState,omitempty"`
 	Enabled           *bool    `json:"enabled,omitempty"`
 	MemoryCurrent     *uint64  `json:"memoryCurrentBytes,omitempty"`
@@ -107,21 +108,33 @@ type Service struct {
 	InactiveEnteredAt *string  `json:"inactiveEnteredAt,omitempty"`
 }
 
+type ContainerPort struct {
+	HostPort      uint16 `json:"hostPort"`
+	ContainerPort uint16 `json:"containerPort"`
+	Protocol      string `json:"protocol"`
+}
+
 type Container struct {
-	Runtime                 string   `json:"runtime"`
-	RuntimeID               string   `json:"runtimeId"`
-	Name                    string   `json:"name"`
-	Image                   string   `json:"image"`
-	ImageDigest             *string  `json:"imageDigest,omitempty"`
-	State                   string   `json:"state"`
-	Health                  *string  `json:"health,omitempty"`
-	PublishedPorts          []string `json:"publishedPorts,omitempty"`
-	CPUPercent              *float64 `json:"cpuPercent,omitempty"`
-	MemoryBytes             *uint64  `json:"memoryBytes,omitempty"`
-	NetworkRxBytesPerSecond *float64 `json:"networkRxBytesPerSecond,omitempty"`
-	NetworkTxBytesPerSecond *float64 `json:"networkTxBytesPerSecond,omitempty"`
-	DiskReadBytesPerSecond  *float64 `json:"diskReadBytesPerSecond,omitempty"`
-	DiskWriteBytesPerSecond *float64 `json:"diskWriteBytesPerSecond,omitempty"`
+	Runtime                 string          `json:"runtime"`
+	RuntimeID               string          `json:"runtimeId"`
+	Name                    string          `json:"name"`
+	Image                   string          `json:"image"`
+	ImageDigest             *string         `json:"imageDigest,omitempty"`
+	State                   string          `json:"state"`
+	Status                  string          `json:"status,omitempty"`
+	Uptime                  string          `json:"uptime,omitempty"`
+	Health                  *string         `json:"health,omitempty"`
+	ComposeService          string          `json:"composeService,omitempty"`
+	NetworkMode             string          `json:"networkMode,omitempty"`
+	NetworkNames            []string        `json:"networkNames,omitempty"`
+	Ports                   []ContainerPort `json:"ports,omitempty"`
+	PublishedPorts          []string        `json:"publishedPorts,omitempty"`
+	CPUPercent              *float64        `json:"cpuPercent,omitempty"`
+	MemoryBytes             *uint64         `json:"memoryBytes,omitempty"`
+	NetworkRxBytesPerSecond *float64        `json:"networkRxBytesPerSecond,omitempty"`
+	NetworkTxBytesPerSecond *float64        `json:"networkTxBytesPerSecond,omitempty"`
+	DiskReadBytesPerSecond  *float64        `json:"diskReadBytesPerSecond,omitempty"`
+	DiskWriteBytesPerSecond *float64        `json:"diskWriteBytesPerSecond,omitempty"`
 }
 
 type StorageHealth struct {
@@ -357,6 +370,9 @@ func ValidateHeartbeat(heartbeat Heartbeat) error {
 		if strings.TrimSpace(service.Name) == "" || len(service.Name) > 256 || len(service.Description) > 2048 || strings.TrimSpace(service.ActiveState) == "" || len(service.ActiveState) > 64 || len(service.SubState) > 64 {
 			return errors.New("service identity fields are invalid")
 		}
+		if service.Classification != "" && service.Classification != "user-installed" && service.Classification != "system" && service.Classification != "unknown" {
+			return errors.New("service classification is invalid")
+		}
 		if (service.LastResult != nil && len(*service.LastResult) > 256) ||
 			(service.ActiveEnteredAt != nil && len(*service.ActiveEnteredAt) > 128) ||
 			(service.InactiveEnteredAt != nil && len(*service.InactiveEnteredAt) > 128) ||
@@ -365,8 +381,21 @@ func ValidateHeartbeat(heartbeat Heartbeat) error {
 		}
 	}
 	for _, container := range heartbeat.Containers {
-		if (container.Runtime != "docker" && container.Runtime != "podman") || strings.TrimSpace(container.RuntimeID) == "" || len(container.RuntimeID) > 128 || strings.TrimSpace(container.Name) == "" || len(container.Name) > 256 || strings.TrimSpace(container.Image) == "" || len(container.Image) > 512 || len(container.State) > 64 || len(container.PublishedPorts) > 128 {
+		if (container.Runtime != "docker" && container.Runtime != "podman") || strings.TrimSpace(container.RuntimeID) == "" || len(container.RuntimeID) > 128 || strings.TrimSpace(container.Name) == "" || len(container.Name) > 256 || strings.TrimSpace(container.Image) == "" || len(container.Image) > 512 || len(container.State) > 64 || len(container.Status) > 256 || len(container.Uptime) > 128 || len(container.ComposeService) > 256 || len(container.NetworkNames) > 32 || len(container.Ports) > 128 || len(container.PublishedPorts) > 128 {
 			return errors.New("container identity fields are required")
+		}
+		if container.NetworkMode != "" && container.NetworkMode != "host" && container.NetworkMode != "bridge" && container.NetworkMode != "none" && container.NetworkMode != "custom" {
+			return errors.New("container network mode is invalid")
+		}
+		for _, name := range container.NetworkNames {
+			if strings.TrimSpace(name) == "" || len(name) > 128 {
+				return errors.New("container network name is invalid")
+			}
+		}
+		for _, port := range container.Ports {
+			if port.HostPort == 0 || port.ContainerPort == 0 || (port.Protocol != "tcp" && port.Protocol != "udp" && port.Protocol != "sctp") {
+				return errors.New("container port mapping is invalid")
+			}
 		}
 		for _, port := range container.PublishedPorts {
 			if len(port) > 128 {

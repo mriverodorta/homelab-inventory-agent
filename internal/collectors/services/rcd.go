@@ -18,6 +18,22 @@ const maxRCdOutput = 256 * 1024
 
 var rcServiceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,255}$`)
 
+type rcService struct {
+	name           string
+	classification string
+}
+
+func classifyRCdPath(path string) string {
+	switch {
+	case path == "/usr/local/etc/rc.d" || strings.HasPrefix(path, "/usr/local/etc/rc.d/"):
+		return "user-installed"
+	case path == "/etc/rc.d" || strings.HasPrefix(path, "/etc/rc.d/"):
+		return "system"
+	default:
+		return "unknown"
+	}
+}
+
 type RCd struct {
 	runner  commandrunner.Runner
 	timeout time.Duration
@@ -43,7 +59,7 @@ func (collector *RCd) Collect(ctx context.Context) ([]protocol.Service, error) {
 	if len(lines) > 513 {
 		return nil, errors.New("rc.d service count exceeds the protocol limit")
 	}
-	names := make([]string, 0, len(lines))
+	services := make([]rcService, 0, len(lines))
 	seen := map[string]struct{}{}
 	for _, line := range lines {
 		path := strings.TrimSpace(line)
@@ -61,17 +77,17 @@ func (collector *RCd) Collect(ctx context.Context) ([]protocol.Service, error) {
 			continue
 		}
 		seen[name] = struct{}{}
-		names = append(names, name)
+		services = append(services, rcService{name: name, classification: classifyRCdPath(path)})
 	}
-	if len(names) > 512 {
+	if len(services) > 512 {
 		return nil, errors.New("rc.d service count exceeds the protocol limit")
 	}
-	sort.Strings(names)
+	sort.Slice(services, func(first, second int) bool { return services[first].name < services[second].name })
 
-	result := make([]protocol.Service, 0, len(names))
-	for _, name := range names {
+	result := make([]protocol.Service, 0, len(services))
+	for _, service := range services {
 		statusContext, statusCancel := context.WithTimeout(collectionContext, time.Second)
-		body, statusErr := collector.runner.Run(statusContext, "/usr/sbin/service", name, "onestatus")
+		body, statusErr := collector.runner.Run(statusContext, "/usr/sbin/service", service.name, "onestatus")
 		statusCancel()
 		statusText := strings.ToLower(string(body))
 		activeState, subState := "unknown", "status-unavailable"
@@ -85,7 +101,8 @@ func (collector *RCd) Collect(ctx context.Context) ([]protocol.Service, error) {
 		}
 		enabled := true
 		result = append(result, protocol.Service{
-			Name: name, ActiveState: activeState, SubState: subState, Enabled: &enabled,
+			Name: service.name, ActiveState: activeState, SubState: subState, Enabled: &enabled,
+			Classification: service.classification,
 		})
 	}
 	return result, nil

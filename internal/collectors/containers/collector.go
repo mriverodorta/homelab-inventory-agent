@@ -68,13 +68,20 @@ type runtimeVersion struct {
 var apiVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
 
 type listContainer struct {
-	ID      string   `json:"Id"`
-	Names   []string `json:"Names"`
-	Image   string   `json:"Image"`
-	ImageID string   `json:"ImageID"`
-	State   string   `json:"State"`
-	Status  string   `json:"Status"`
-	Ports   []struct {
+	ID         string            `json:"Id"`
+	Names      []string          `json:"Names"`
+	Image      string            `json:"Image"`
+	ImageID    string            `json:"ImageID"`
+	State      string            `json:"State"`
+	Status     string            `json:"Status"`
+	Labels     map[string]string `json:"Labels"`
+	HostConfig struct {
+		NetworkMode string `json:"NetworkMode"`
+	} `json:"HostConfig"`
+	NetworkSettings struct {
+		Networks map[string]json.RawMessage `json:"Networks"`
+	} `json:"NetworkSettings"`
+	Ports []struct {
 		IP          string `json:"IP"`
 		PrivatePort uint16 `json:"PrivatePort"`
 		PublicPort  uint16 `json:"PublicPort"`
@@ -268,7 +275,12 @@ func (collector *Collector) Collect(ctx context.Context) ([]protocol.Container, 
 		}
 		container := protocol.Container{
 			Runtime: collector.runtime, RuntimeID: listedContainer.ID, Name: name,
-			Image: listedContainer.Image, State: listedContainer.State,
+			Image: listedContainer.Image, State: listedContainer.State, Status: strings.TrimSpace(listedContainer.Status),
+			Uptime:         uptimeFromStatus(listedContainer.Status),
+			ComposeService: strings.TrimSpace(listedContainer.Labels["com.docker.compose.service"]),
+			NetworkMode:    networkMode(listedContainer.HostConfig.NetworkMode),
+			NetworkNames:   networkNames(listedContainer),
+			Ports:          structuredPorts(listedContainer),
 			PublishedPorts: publishedPorts(listedContainer),
 		}
 		if listedContainer.ImageID != "" {
@@ -315,6 +327,70 @@ func healthFromStatus(status string) string {
 		}
 	}
 	return ""
+}
+
+func uptimeFromStatus(status string) string {
+	value := strings.TrimSpace(status)
+	if !strings.HasPrefix(value, "Up ") {
+		return ""
+	}
+	value = strings.TrimSpace(strings.TrimPrefix(value, "Up "))
+	if index := strings.LastIndex(value, " ("); index >= 0 && strings.HasSuffix(value, ")") {
+		value = strings.TrimSpace(value[:index])
+	}
+	if len(value) > 128 {
+		return value[:128]
+	}
+	return value
+}
+
+func networkMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "host":
+		return "host"
+	case "none":
+		return "none"
+	case "", "default", "bridge":
+		return "bridge"
+	default:
+		return "custom"
+	}
+}
+
+func networkNames(container listContainer) []string {
+	result := make([]string, 0, len(container.NetworkSettings.Networks))
+	for name := range container.NetworkSettings.Networks {
+		name = strings.TrimSpace(name)
+		if name != "" && len(name) <= 128 {
+			result = append(result, name)
+		}
+	}
+	sort.Strings(result)
+	if len(result) > 32 {
+		result = result[:32]
+	}
+	return result
+}
+
+func structuredPorts(container listContainer) []protocol.ContainerPort {
+	ports := make([]protocol.ContainerPort, 0, len(container.Ports))
+	for _, port := range container.Ports {
+		protocolName := strings.ToLower(strings.TrimSpace(port.Type))
+		if port.PublicPort == 0 || port.PrivatePort == 0 || (protocolName != "tcp" && protocolName != "udp" && protocolName != "sctp") {
+			continue
+		}
+		ports = append(ports, protocol.ContainerPort{HostPort: port.PublicPort, ContainerPort: port.PrivatePort, Protocol: protocolName})
+	}
+	sort.Slice(ports, func(first, second int) bool {
+		if ports[first].HostPort != ports[second].HostPort {
+			return ports[first].HostPort < ports[second].HostPort
+		}
+		if ports[first].ContainerPort != ports[second].ContainerPort {
+			return ports[first].ContainerPort < ports[second].ContainerPort
+		}
+		return ports[first].Protocol < ports[second].Protocol
+	})
+	return ports
 }
 
 func publishedPorts(container listContainer) []string {

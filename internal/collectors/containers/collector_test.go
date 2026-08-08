@@ -28,8 +28,10 @@ func runtimeHandler() http.Handler {
 		_ = json.NewEncoder(response).Encode([]map[string]any{{
 			"Id": "abcdef0123456789", "Names": []string{"/media"}, "Image": "example/media:1",
 			"ImageID": "sha256:image", "State": "running", "Status": "Up 2 hours (healthy)",
-			"Ports": []map[string]any{{"IP": "127.0.0.1", "PrivatePort": 8096, "PublicPort": 8096, "Type": "tcp"}},
-			"Env":   []string{"TOKEN=secret"}, "Labels": map[string]string{"secret": "value"},
+			"Ports":           []map[string]any{{"IP": "127.0.0.1", "PrivatePort": 8096, "PublicPort": 8096, "Type": "tcp"}},
+			"HostConfig":      map[string]any{"NetworkMode": "internal_net"},
+			"NetworkSettings": map[string]any{"Networks": map[string]any{"internal_net": map[string]any{"IPAddress": "172.20.0.5", "MacAddress": "00:11:22:33:44:55"}}},
+			"Env":             []string{"TOKEN=secret"}, "Labels": map[string]string{"secret": "value", "com.docker.compose.service": "homarr"},
 			"Command": []string{"server", "--token", "secret"}, "Mounts": []string{"/private"},
 		}})
 	})
@@ -152,12 +154,18 @@ func TestProxyCollectorAllowsOnlySanitizedContainerFields(t *testing.T) {
 	if containers[0].MemoryBytes == nil || *containers[0].MemoryBytes != 1536 || containers[0].CPUPercent == nil || *containers[0].CPUPercent != 40 {
 		t.Fatalf("unexpected metrics: %#v", containers[0])
 	}
+	if containers[0].Uptime != "2 hours" || containers[0].ComposeService != "homarr" || containers[0].NetworkMode != "custom" || len(containers[0].NetworkNames) != 1 || containers[0].NetworkNames[0] != "internal_net" {
+		t.Fatalf("unexpected summary metadata: %#v", containers[0])
+	}
+	if len(containers[0].Ports) != 1 || containers[0].Ports[0].HostPort != 8096 || containers[0].Ports[0].ContainerPort != 8096 || containers[0].Ports[0].Protocol != "tcp" {
+		t.Fatalf("unexpected structured ports: %#v", containers[0].Ports)
+	}
 	body, err := json.Marshal(containers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lower := strings.ToLower(string(body))
-	for _, forbidden := range []string{"token=secret", "should_not", "labels", "command", "mounts", "/private"} {
+	for _, forbidden := range []string{"token=secret", "should_not", "labels", "command", "mounts", "/private", "172.20.0.5", "00:11:22:33:44:55", "secret\":\"value"} {
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("payload exposed forbidden value %q: %s", forbidden, body)
 		}
