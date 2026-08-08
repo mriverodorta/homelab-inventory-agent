@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -26,6 +27,8 @@ type backgroundCollector interface {
 	Start(context.Context, protocol.Contract)
 }
 
+var ErrRegistrationRevoked = errors.New("agent registration was revoked; the agent is dormant until it is enrolled again")
+
 type Agent struct {
 	config       config.Config
 	version      string
@@ -35,6 +38,7 @@ type Agent struct {
 	client       *transport.Client
 	collector    Collector
 	contractPath string
+	dormantPath  string
 	onError      func(error)
 }
 
@@ -63,8 +67,33 @@ func New(options Options) (*Agent, error) {
 	return &Agent{
 		config: options.Config, version: options.Version, capabilities: options.Capabilities,
 		identity: options.Identity, queue: options.Queue, client: options.Client,
-		collector: options.Collector, contractPath: filepath.Join(options.Config.StateDirectory, "contract.json"), onError: onError,
+		collector:    options.Collector,
+		contractPath: filepath.Join(options.Config.StateDirectory, "contract.json"),
+		dormantPath:  filepath.Join(options.Config.StateDirectory, "dormant.json"), onError: onError,
 	}, nil
+}
+
+func (a *Agent) dormant() bool {
+	info, err := os.Stat(a.dormantPath)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func (a *Agent) markDormant() error {
+	body := []byte(fmt.Sprintf("{\"state\":\"revoked\",\"recordedAt\":%q}\n", time.Now().UTC().Format(time.RFC3339Nano)))
+	temporary := a.dormantPath + ".tmp"
+	if err := os.WriteFile(temporary, body, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, a.dormantPath); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	return nil
+}
+
+func (a *Agent) waitDormant(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
 }
 
 func (a *Agent) Activate(ctx context.Context, enrollmentToken string) error {
@@ -183,7 +212,10 @@ func (a *Agent) Collect(ctx context.Context, contract protocol.Contract) error {
 		heartbeat.CollectedAt = time.Now().UTC()
 	}
 	if heartbeat.Capabilities == nil {
-		heartbeat.Capabilities = a.capabilities
+		heartbeat.Capabilities = map[string]protocol.Capability{}
+	}
+	for name, capability := range a.capabilities {
+		heartbeat.Capabilities[name] = capability
 	}
 	if err := protocol.ValidateHeartbeat(heartbeat); err != nil {
 		return err
@@ -210,6 +242,12 @@ func (a *Agent) Flush(ctx context.Context) error {
 	for _, entry := range entries {
 		if err := a.client.SendHeartbeat(ctx, a.config.Host, a.identity.DeviceID(), a.identity.PrivateKey(), entry.Sequence, entry.Body); err != nil {
 			var endpointError *transport.HTTPError
+			if errors.As(err, &endpointError) && endpointError.StatusCode == 410 && endpointError.Code == "agent-registration-revoked" {
+				if persistErr := a.markDormant(); persistErr != nil {
+					return fmt.Errorf("persist revoked agent state: %w", persistErr)
+				}
+				return ErrRegistrationRevoked
+			}
 			if !errors.As(err, &endpointError) || endpointError.StatusCode != 409 || endpointError.Code != "replayed-agent-request" {
 				return err
 			}
@@ -227,6 +265,9 @@ func (a *Agent) Flush(ctx context.Context) error {
 }
 
 func (a *Agent) SubmitHardwareSnapshot(ctx context.Context, snapshot protocol.HardwareSnapshot) error {
+	if a.dormant() {
+		return ErrRegistrationRevoked
+	}
 	if snapshot.Host != a.config.Host {
 		return errors.New("hardware snapshot does not match the configured host")
 	}
@@ -253,6 +294,9 @@ func (a *Agent) SubmitHardwareSnapshot(ctx context.Context, snapshot protocol.Ha
 }
 
 func (a *Agent) RunOnce(ctx context.Context) error {
+	if a.dormant() {
+		return ErrRegistrationRevoked
+	}
 	contract, err := a.Contract(ctx)
 	if err != nil {
 		return err
@@ -264,6 +308,9 @@ func (a *Agent) RunOnce(ctx context.Context) error {
 }
 
 func (a *Agent) Run(ctx context.Context) error {
+	if a.dormant() {
+		return a.waitDormant(ctx)
+	}
 	contract, err := a.Contract(ctx)
 	if err != nil {
 		return err
@@ -274,6 +321,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.Collect(ctx, contract); err != nil {
 		a.onError(err)
 	} else if err := a.Flush(ctx); err != nil {
+		if errors.Is(err, ErrRegistrationRevoked) {
+			return a.waitDormant(ctx)
+		}
 		a.onError(err)
 	}
 	ticker := time.NewTicker(time.Duration(contract.Collection.HostIntervalSeconds) * time.Second)
@@ -288,6 +338,9 @@ func (a *Agent) Run(ctx context.Context) error {
 				continue
 			}
 			if err := a.Flush(ctx); err != nil {
+				if errors.Is(err, ErrRegistrationRevoked) {
+					return a.waitDormant(ctx)
+				}
 				a.onError(err)
 			}
 		}

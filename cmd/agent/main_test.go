@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mriverodorta/homelab-inventory-agent/internal/agentupdate"
 	protocol "github.com/mriverodorta/homelab-inventory-agent/protocol/v1"
 )
 
@@ -74,5 +75,30 @@ func TestInventoryCommandRequiresRoot(t *testing.T) {
 	err := runInventory(context.Background(), nil, strings.NewReader("no\n"), &strings.Builder{}, commandScanner{})
 	if err == nil || !strings.Contains(err.Error(), "elevated privileges") {
 		t.Fatalf("unprivileged scan was allowed: %v", err)
+	}
+}
+
+func TestUpdateCommandRoutesCheckAndExactVersionWithoutStartingDaemon(t *testing.T) {
+	previousRun := runAgentUpdate
+	previousUserID := effectiveUserID
+	t.Cleanup(func() {
+		runAgentUpdate = previousRun
+		effectiveUserID = previousUserID
+	})
+	effectiveUserID = func() int { return 0 }
+	var received agentupdate.Options
+	runAgentUpdate = func(_ context.Context, options agentupdate.Options) (agentupdate.Result, error) {
+		received = options
+		return agentupdate.Result{CurrentVersion: version, TargetVersion: "0.1.5", UpdateAvailable: true}, nil
+	}
+	var output strings.Builder
+	if err := runUpdate(context.Background(), []string{"--config", "/tmp/config.json", "--version", "0.1.5", "--check"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if received.ConfigPath != "/tmp/config.json" || received.Requested != "0.1.5" || !received.CheckOnly {
+		t.Fatalf("update flags were not routed: %#v", received)
+	}
+	if !strings.Contains(output.String(), "update available") {
+		t.Fatalf("check result was not reported: %s", output.String())
 	}
 }

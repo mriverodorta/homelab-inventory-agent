@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,9 +10,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
+	"github.com/mriverodorta/homelab-inventory-agent/internal/agentupdate"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/buffer"
 	containercollector "github.com/mriverodorta/homelab-inventory-agent/internal/collectors/containers"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/collectors/platform"
@@ -20,16 +23,57 @@ import (
 	"github.com/mriverodorta/homelab-inventory-agent/internal/inventoryscan"
 	agentruntime "github.com/mriverodorta/homelab-inventory-agent/internal/runtime"
 	"github.com/mriverodorta/homelab-inventory-agent/internal/transport"
+	protocol "github.com/mriverodorta/homelab-inventory-agent/protocol/v1"
 )
 
 var version = "0.1.0-dev"
 
 var effectiveUserID = os.Geteuid
 
+var runAgentUpdate = agentupdate.Run
+
+func defaultConfigPath() string {
+	if runtime.GOOS == "freebsd" {
+		return "/usr/local/etc/homelab-inventory-agent/config.json"
+	}
+	return "/etc/homelab-inventory-agent/config.json"
+}
+
+func runUpdate(ctx context.Context, args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("homelab-inventory-agent update", flag.ContinueOnError)
+	flags.SetOutput(output)
+	configPath := flags.String("config", defaultConfigPath(), "configuration file")
+	requestedVersion := flags.String("version", "", "install an exact served version")
+	checkOnly := flags.Bool("check", false, "check for an update without installing it")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("update does not accept positional arguments")
+	}
+	result, err := runAgentUpdate(ctx, agentupdate.Options{
+		ConfigPath: *configPath, CurrentVersion: version, Requested: *requestedVersion,
+		CheckOnly: *checkOnly, EffectiveUserID: effectiveUserID,
+		Output: func(format string, values ...any) { _, _ = fmt.Fprintf(output, format, values...) },
+	})
+	if err != nil {
+		return err
+	}
+	if result.Updated {
+		return nil
+	}
+	if result.UpdateAvailable {
+		_, _ = fmt.Fprintf(output, "Agent update available: %s -> %s\n", result.CurrentVersion, result.TargetVersion)
+	} else {
+		_, _ = fmt.Fprintf(output, "Agent %s is already current.\n", result.CurrentVersion)
+	}
+	return nil
+}
+
 func runInventory(ctx context.Context, args []string, input io.Reader, output io.Writer, scanner inventoryscan.Scanner) error {
 	flags := flag.NewFlagSet("homelab-inventory-agent inventory", flag.ContinueOnError)
 	flags.SetOutput(output)
-	configPath := flags.String("config", "/etc/homelab-inventory-agent/config.json", "configuration file")
+	configPath := flags.String("config", defaultConfigPath(), "configuration file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -69,6 +113,9 @@ func runInventory(ctx context.Context, args []string, input io.Reader, output io
 func run(ctx context.Context, args []string) error {
 	if len(args) > 0 && args[0] == "inventory" {
 		return runInventory(ctx, args[1:], os.Stdin, os.Stdout, nil)
+	}
+	if len(args) > 0 && args[0] == "update" {
+		return runUpdate(ctx, args[1:], os.Stdout)
 	}
 	flags := flag.NewFlagSet("homelab-inventory-agent", flag.ContinueOnError)
 	showVersion := flags.Bool("version", false, "print the agent version and exit")
@@ -137,8 +184,13 @@ func run(ctx context.Context, args []string) error {
 		SMARTDevices: configuration.StorageHealth.SMARTDevices,
 		Containers:   containers,
 	})
+	capabilities := collector.Capabilities()
+	capabilities["agent.native-update"] = protocol.Capability{
+		State:  protocol.Available,
+		Detail: "manual root-authorized atomic update with rollback",
+	}
 	agent, err := agentruntime.New(agentruntime.Options{
-		Config: configuration, Version: version, Capabilities: collector.Capabilities(),
+		Config: configuration, Version: version, Capabilities: capabilities,
 		Identity: deviceIdentity, Queue: queue, Client: client, Collector: collector,
 		OnError: func(err error) { log.Printf("agent cycle failed: %v", err) },
 	})

@@ -4,9 +4,11 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -60,6 +62,7 @@ type runtimeServer struct {
 	server      *httptest.Server
 	mu          sync.Mutex
 	fail        bool
+	revoked     bool
 	sequences   []uint64
 	droppedSeen []uint64
 	snapshots   []protocol.HardwareSnapshot
@@ -87,6 +90,11 @@ func newRuntimeServer(t *testing.T, offlineSamples ...int) *runtimeServer {
 		case "/api/agent/hosts/server/1/heartbeats":
 			state.mu.Lock()
 			defer state.mu.Unlock()
+			if state.revoked {
+				response.WriteHeader(http.StatusGone)
+				_, _ = response.Write([]byte(`{"message":"registration revoked","code":"agent-registration-revoked"}`))
+				return
+			}
 			sequence, _ := strconv.ParseUint(request.Header.Get("X-Homelab-Agent-Sequence"), 10, 64)
 			if state.replay[sequence] {
 				response.WriteHeader(http.StatusConflict)
@@ -310,5 +318,50 @@ func TestSubmitHardwareSnapshotUsesIdentityWithoutQueueing(t *testing.T) {
 	entries, err := queue.Entries()
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("hardware snapshot entered telemetry queue: %#v %v", entries, err)
+	}
+}
+
+func TestRevokedRegistrationPersistsDormantStateAndStopsDelivery(t *testing.T) {
+	server := newRuntimeServer(t)
+	defer server.server.Close()
+	directory := t.TempDir()
+	agent, _, queue := createRuntime(t, server.server.URL, directory, buffer.Limits{Samples: 60, Bytes: 10 << 20})
+	if err := agent.Activate(context.Background(), "token"); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	server.revoked = true
+	server.mu.Unlock()
+	if err := agent.RunOnce(context.Background()); !errors.Is(err, ErrRegistrationRevoked) {
+		t.Fatalf("revocation was not terminal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "dormant.json")); err != nil {
+		t.Fatalf("dormant state was not persisted: %v", err)
+	}
+	entries, err := queue.Entries()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("unaccepted heartbeat was removed: %#v %v", entries, err)
+	}
+	if err := agent.RunOnce(context.Background()); !errors.Is(err, ErrRegistrationRevoked) {
+		t.Fatalf("dormant restart attempted delivery: %v", err)
+	}
+}
+
+func TestCollectMergesRuntimeCapabilitiesIntoCollectorHeartbeat(t *testing.T) {
+	server := newRuntimeServer(t)
+	defer server.server.Close()
+	agent, _, _ := createRuntime(t, server.server.URL, t.TempDir(), buffer.Limits{Samples: 60, Bytes: 10 << 20})
+	agent.capabilities["agent.native-update"] = protocol.Capability{State: protocol.Available}
+	if err := agent.Activate(context.Background(), "token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	// The server decodes heartbeats in its handler; successful validation proves the merged capability is protocol-safe.
+	if len(server.sequences) != 1 {
+		t.Fatalf("heartbeat was not delivered: %#v", server.sequences)
 	}
 }

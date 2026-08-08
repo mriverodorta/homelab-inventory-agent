@@ -13,6 +13,7 @@ The project is under active development. Homelab Inventory builds and embeds a p
 - Explicit opt-in for container and SMART collection.
 - No remote command execution, shell plugins, process command lines, environment variables, container secrets, or host mount paths.
 - A separate, explicit `sudo homelab-inventory-agent inventory` workflow for reviewed one-time hardware discovery.
+- A separate, explicit root-only updater that never runs from the background daemon.
 
 The capability baseline was informed by an implementation review of Beszel v0.18.7, but this is an independent implementation. No Beszel source code or protocol is copied into this repository.
 
@@ -85,11 +86,21 @@ Each release bundle includes a machine-readable `manifest.json`, SHA-256 checksu
 
 The Linux installer creates a dedicated `homelab-inventory-agent` system user, verifies the binary and systemd unit against the release checksum manifest, activates the agent once, and starts the hardened service. The background process has no Linux capabilities and writes only to `/var/lib/homelab-inventory-agent`.
 
-Upgrades preserve both `/etc/homelab-inventory-agent/config.json` and `/var/lib/homelab-inventory-agent/identity.json`. They replace only the verified binary and service unit, and restore the prior files if activation of the new installation fails.
+The first upgrade from an agent release that predates native updates uses the generated installer command once. That transaction preserves both `/etc/homelab-inventory-agent/config.json` and `/var/lib/homelab-inventory-agent/identity.json`:
 
 ```bash
 sudo ./install.sh --endpoint https://inventory.example.com --version 0.1.0 --upgrade
 ```
+
+After that transition, the installed agent discovers releases from its configured Homelab Inventory origin:
+
+```bash
+sudo homelab-inventory-agent update --check
+sudo homelab-inventory-agent update
+sudo homelab-inventory-agent update --version 0.1.5
+```
+
+The normal command installs the newest compatible embedded release. `--version` requests an exact version only when that application instance serves it. The updater verifies the release manifest, protocol, platform, byte size, and SHA-256 digest, refuses cross-origin redirects, stops the service only after downloads validate, and atomically restores the prior binary and service definition if restart health checks fail. Configuration, Ed25519 identity, offline queue, contract cache, hardware state, and container settings are not rewritten.
 
 Uninstalling preserves configuration and identity so a later reinstall remains the same enrolled device. Use the destructive purge option only when intentionally retiring the identity.
 
@@ -98,7 +109,9 @@ sudo ./uninstall.sh
 sudo ./uninstall.sh --purge
 ```
 
-The release workflow runs the race detector, vet, static analysis, vulnerability analysis, shell validation, reproducibility checks, CodeQL, SBOM generation, keyless signature generation, and build provenance attestation before publishing artifacts. Agent upgrades remain manual: Homelab Inventory reports an available version and provides a verified upgrade command, but the agent never replaces itself.
+The release workflow runs the race detector, vet, static analysis, vulnerability analysis, shell validation, reproducibility checks, CodeQL, SBOM generation, keyless signature generation, and build provenance attestation before publishing artifacts. Agent upgrades remain manual: Homelab Inventory reports an available version and provides a verified command, but the background service never replaces itself.
+
+When an administrator unlinks a host in Homelab Inventory, the revoked agent records a dormant state and stops delivery instead of retrying indefinitely. Re-enrollment is an explicit administrator action.
 
 ## FreeBSD and OPNsense
 
