@@ -15,6 +15,8 @@ type cachedContract struct {
 	Contract protocol.Contract `json:"contract"`
 }
 
+var errContractCacheSchemaIncompatible = errors.New("cached contract schema is incompatible")
+
 func loadContractCache(filePath string) (cachedContract, error) {
 	body, err := os.ReadFile(filePath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -31,8 +33,11 @@ func loadContractCache(filePath string) (cachedContract, error) {
 		return cachedContract{}, fmt.Errorf("cached contract is invalid: %w", err)
 	}
 	digest, err := protocol.BundleDigest()
-	if err != nil || value.Contract.SchemaBundleDigest != digest {
-		return cachedContract{}, errors.New("cached contract schema is incompatible")
+	if err != nil {
+		return cachedContract{}, fmt.Errorf("compute embedded contract schema digest: %w", err)
+	}
+	if value.Contract.SchemaBundleDigest != digest {
+		return cachedContract{}, errContractCacheSchemaIncompatible
 	}
 	return value, nil
 }

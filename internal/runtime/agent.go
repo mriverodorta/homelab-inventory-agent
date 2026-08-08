@@ -118,7 +118,9 @@ func (a *Agent) Activate(ctx context.Context, enrollmentToken string) error {
 
 func (a *Agent) Contract(ctx context.Context) (protocol.Contract, error) {
 	cached, err := loadContractCache(a.contractPath)
-	if err != nil {
+	if errors.Is(err, errContractCacheSchemaIncompatible) {
+		cached = cachedContract{}
+	} else if err != nil {
 		return protocol.Contract{}, err
 	}
 	contract, etag, notModified, fetchErr := a.client.FetchContract(ctx, cached.ETag)

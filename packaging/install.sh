@@ -115,6 +115,15 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+service_is_sustained_healthy() {
+  check=1
+  while [ "$check" -le 3 ]; do
+    systemctl is-active --quiet homelab-inventory-agent.service || return 1
+    [ "$check" -eq 3 ] || sleep 1
+    check=$((check + 1))
+  done
+}
+
 if [ -n "$ASSET_DIRECTORY" ]; then
   cp "$ASSET_DIRECTORY/$filename" "$temporary/$filename"
   cp "$ASSET_DIRECTORY/checksums.txt" "$temporary/checksums.txt"
@@ -205,7 +214,10 @@ if [ -z "$INSTALL_ROOT" ]; then
   systemctl daemon-reload
   systemctl enable homelab-inventory-agent.service >/dev/null
   systemctl restart homelab-inventory-agent.service
-  systemctl is-active --quiet homelab-inventory-agent.service
+  service_is_sustained_healthy || {
+    echo "The updated agent service did not remain healthy; restoring the previous installation." >&2
+    exit 70
+  }
 fi
 
 rollback=0

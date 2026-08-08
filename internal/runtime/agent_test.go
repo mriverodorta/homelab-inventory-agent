@@ -187,6 +187,94 @@ func TestAgentActivatesCachesContractAndPersistsIdentity(t *testing.T) {
 	}
 }
 
+func TestAgentRefreshesIncompatibleContractCacheWithoutStaleETag(t *testing.T) {
+	current := runtimeContract(t)
+	current.Revision = 2
+	directory := t.TempDir()
+	cachePath := filepath.Join(directory, "contract.json")
+	stale := runtimeContract(t)
+	stale.SchemaBundleDigest = strings.Repeat("0", 64)
+	staleBody, err := json.Marshal(cachedContract{ETag: `"stale"`, Contract: stale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, append(staleBody, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var receivedETag string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		receivedETag = request.Header.Get("If-None-Match")
+		response.Header().Set("ETag", `"current"`)
+		_ = json.NewEncoder(response).Encode(current)
+	}))
+	defer server.Close()
+	agent, _, _ := createRuntime(t, server.URL, directory, buffer.Limits{Samples: 60, Bytes: 10 << 20})
+
+	contract, err := agent.Contract(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.Revision != current.Revision || receivedETag != "" {
+		t.Fatalf("incompatible cache affected refresh: revision=%d etag=%q", contract.Revision, receivedETag)
+	}
+	refreshed, err := loadContractCache(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.ETag != `"current"` || refreshed.Contract.Revision != current.Revision {
+		t.Fatalf("current contract was not cached: %#v", refreshed)
+	}
+}
+
+func TestAgentPreservesIncompatibleContractCacheWhenRefreshFails(t *testing.T) {
+	directory := t.TempDir()
+	cachePath := filepath.Join(directory, "contract.json")
+	stale := runtimeContract(t)
+	stale.SchemaBundleDigest = strings.Repeat("0", 64)
+	staleBody, err := json.Marshal(cachedContract{ETag: `"stale"`, Contract: stale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleBody = append(staleBody, '\n')
+	if err := os.WriteFile(cachePath, staleBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		http.Error(response, "offline", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	agent, _, _ := createRuntime(t, server.URL, directory, buffer.Limits{Samples: 60, Bytes: 10 << 20})
+
+	if _, err := agent.Contract(context.Background()); err == nil {
+		t.Fatal("failed refresh accepted an incompatible cache")
+	}
+	retained, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(retained) != string(staleBody) {
+		t.Fatal("failed refresh modified the incompatible cache")
+	}
+}
+
+func TestAgentRejectsMalformedContractCacheWithoutFetching(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "contract.json"), []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+	agent, _, _ := createRuntime(t, server.URL, directory, buffer.Limits{Samples: 60, Bytes: 10 << 20})
+
+	if _, err := agent.Contract(context.Background()); err == nil || !strings.Contains(err.Error(), "cache is invalid") {
+		t.Fatalf("malformed cache was not rejected: %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("malformed cache triggered %d requests", requests)
+	}
+}
+
 func TestAgentBuffersOutageAndFlushesInSequence(t *testing.T) {
 	server := newRuntimeServer(t)
 	defer server.server.Close()

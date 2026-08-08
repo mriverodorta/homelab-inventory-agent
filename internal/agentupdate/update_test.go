@@ -16,14 +16,22 @@ import (
 )
 
 type fakeRunner struct {
-	commands    [][]string
-	version     string
-	failCommand string
+	commands     [][]string
+	version      string
+	failCommand  string
+	healthCalls  int
+	failHealthAt int
 }
 
 func (runner *fakeRunner) Run(_ context.Context, name string, arguments ...string) error {
 	command := append([]string{name}, arguments...)
 	runner.commands = append(runner.commands, command)
+	if strings.Join(command, " ") == "service health" {
+		runner.healthCalls++
+		if runner.failHealthAt > 0 && runner.healthCalls == runner.failHealthAt {
+			return errors.New("injected delayed health failure")
+		}
+	}
 	if strings.Join(command, " ") == runner.failCommand {
 		return errors.New("injected command failure")
 	}
@@ -115,7 +123,7 @@ func updateFixture(t *testing.T, releaseVersion string) (Options, *fakeRunner, s
 	}
 	return Options{
 		ConfigPath: configPath, CurrentVersion: "0.1.4", EffectiveUserID: func() int { return 0 },
-		platform: selected, runner: runner, lockPath: filepath.Join(directory, "update.lock"),
+		platform: selected, runner: runner, lockPath: filepath.Join(directory, "update.lock"), healthChecks: 3,
 	}, runner, binaryPath, servicePath, identityPath
 }
 
@@ -140,6 +148,8 @@ func TestRunUsesFreeBSDServiceTransaction(t *testing.T) {
 	want := [][]string{
 		{"service", "homelab_inventory_agent", "stop"},
 		{"service", "homelab_inventory_agent", "restart"},
+		{"service", "homelab_inventory_agent", "onestatus"},
+		{"service", "homelab_inventory_agent", "onestatus"},
 		{"service", "homelab_inventory_agent", "onestatus"},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
@@ -174,7 +184,7 @@ func TestRunReplacesExecutableAndServiceWithoutTouchingState(t *testing.T) {
 	if body, _ := os.ReadFile(identityPath); string(body) != "private-identity" {
 		t.Fatalf("private state changed: %q", body)
 	}
-	wantCommands := [][]string{{"service", "stop"}, {"service", "reload"}, {"service", "start"}, {"service", "health"}}
+	wantCommands := [][]string{{"service", "stop"}, {"service", "reload"}, {"service", "start"}, {"service", "health"}, {"service", "health"}, {"service", "health"}}
 	if !reflect.DeepEqual(runner.commands, wantCommands) {
 		t.Fatalf("service transaction mismatch: %#v", runner.commands)
 	}
@@ -183,7 +193,7 @@ func TestRunReplacesExecutableAndServiceWithoutTouchingState(t *testing.T) {
 func TestRunRollsBackBothFilesWhenUpdatedServiceIsUnhealthy(t *testing.T) {
 	options, runner, binaryPath, servicePath, identityPath := updateFixture(t, "0.1.5")
 	runner.failCommand = "service health"
-	if _, err := Run(context.Background(), options); err == nil || !strings.Contains(err.Error(), "did not become healthy") {
+	if _, err := Run(context.Background(), options); err == nil || !strings.Contains(err.Error(), "did not remain healthy") {
 		t.Fatalf("health failure did not fail update: %v", err)
 	}
 	if body, _ := os.ReadFile(binaryPath); string(body) != "old-binary" {
@@ -194,6 +204,25 @@ func TestRunRollsBackBothFilesWhenUpdatedServiceIsUnhealthy(t *testing.T) {
 	}
 	if body, _ := os.ReadFile(identityPath); string(body) != "private-identity" {
 		t.Fatalf("state changed during rollback: %q", body)
+	}
+}
+
+func TestRunRollsBackWhenServiceCrashesAfterInitiallyReportingHealthy(t *testing.T) {
+	options, runner, binaryPath, servicePath, identityPath := updateFixture(t, "0.1.5")
+	options.healthChecks = 3
+	options.healthInterval = 0
+	runner.failHealthAt = 2
+	if _, err := Run(context.Background(), options); err == nil || !strings.Contains(err.Error(), "did not remain healthy") {
+		t.Fatalf("delayed health failure did not fail update: %v", err)
+	}
+	if body, _ := os.ReadFile(binaryPath); string(body) != "old-binary" {
+		t.Fatalf("executable rollback failed: %q", body)
+	}
+	if body, _ := os.ReadFile(servicePath); string(body) != "old-service" {
+		t.Fatalf("service rollback failed: %q", body)
+	}
+	if body, _ := os.ReadFile(identityPath); string(body) != "private-identity" {
+		t.Fatalf("state changed during delayed rollback: %q", body)
 	}
 }
 

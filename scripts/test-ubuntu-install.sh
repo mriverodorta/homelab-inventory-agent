@@ -32,6 +32,13 @@ docker run --rm --platform linux/amd64 \
     mkdir -p /test-bin
     cat > /test-bin/systemctl <<"SYSTEMCTL"
 #!/bin/sh
+if [ "${1:-}" = "is-active" ] && [ -f /tmp/hli-systemctl-fail-after-first ]; then
+  count=0
+  [ ! -f /tmp/hli-systemctl-health-count ] || count=$(cat /tmp/hli-systemctl-health-count)
+  count=$((count + 1))
+  printf "%s\n" "$count" >/tmp/hli-systemctl-health-count
+  [ "$count" -lt 2 ] || exit 1
+fi
 exit 0
 SYSTEMCTL
     chmod 0755 /test-bin/systemctl
@@ -73,6 +80,19 @@ SYSTEMCTL
     first_identity=$(sha256sum /var/lib/homelab-inventory-agent/identity.json | awk "{print \$1}")
     first_config=$(sha256sum /etc/homelab-inventory-agent/config.json | awk "{print \$1}")
 
+    touch /tmp/hli-systemctl-fail-after-first
+    rm -f /tmp/hli-systemctl-health-count
+    if HLI_ASSET_DIR=/assets sh /assets/install.sh \
+      --endpoint http://127.0.0.1:8080 \
+      --version "$HLI_TEST_VERSION" \
+      --upgrade; then
+      echo "Crash-looping service passed the sustained health gate." >&2
+      exit 1
+    fi
+    rm -f /tmp/hli-systemctl-fail-after-first /tmp/hli-systemctl-health-count
+    test "$first_identity" = "$(sha256sum /var/lib/homelab-inventory-agent/identity.json | awk "{print \$1}")"
+    test "$first_config" = "$(sha256sum /etc/homelab-inventory-agent/config.json | awk "{print \$1}")"
+
     touch /tmp/hli-fail-activation
     if install_agent proxy http://127.0.0.1:2375; then
       echo "Injected activation failure was accepted." >&2
@@ -94,6 +114,18 @@ SYSTEMCTL
       --upgrade
     test "$second_identity" = "$(sha256sum /var/lib/homelab-inventory-agent/identity.json | awk "{print \$1}")"
     test "$(stat -c %a /var/lib/homelab-inventory-agent/identity.json)" = 600
+
+    sed -E -i "s/(\"schemaBundleDigest\":\")[a-f0-9]{64}(\")/\1$(printf 0%.0s $(seq 1 64))\2/" \
+      /var/lib/homelab-inventory-agent/contract.json
+    grep -q "$(printf 0%.0s $(seq 1 64))" /var/lib/homelab-inventory-agent/contract.json
+    runuser -u homelab-inventory-agent -- \
+      /usr/local/sbin/homelab-inventory-agent \
+      -config /etc/homelab-inventory-agent/config.json \
+      -once
+    if grep -q "$(printf 0%.0s $(seq 1 64))" /var/lib/homelab-inventory-agent/contract.json; then
+      echo "Incompatible contract cache was not refreshed." >&2
+      exit 1
+    fi
 
     echo "Ubuntu installer transaction smoke test passed."
   '

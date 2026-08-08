@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 type commandRunner interface {
@@ -83,6 +84,33 @@ func runCommand(ctx context.Context, runner commandRunner, command []string) err
 	}
 	if err := runner.Run(ctx, command[0], command[1:]...); err != nil {
 		return fmt.Errorf("run %s: %w", command[0], err)
+	}
+	return nil
+}
+
+func waitForSustainedHealth(ctx context.Context, runner commandRunner, command []string, checks int, interval time.Duration) error {
+	if len(command) == 0 {
+		return nil
+	}
+	if checks < 1 {
+		checks = 1
+	}
+	for check := 0; check < checks; check++ {
+		if err := runCommand(ctx, runner, command); err != nil {
+			return err
+		}
+		if check+1 == checks || interval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	return nil
 }

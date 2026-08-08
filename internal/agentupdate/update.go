@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mriverodorta/homelab-inventory-agent/internal/config"
 )
@@ -23,6 +24,8 @@ type Options struct {
 	platform        *platform
 	runner          commandRunner
 	lockPath        string
+	healthChecks    int
+	healthInterval  time.Duration
 }
 
 type Result struct {
@@ -58,6 +61,14 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	runner := options.runner
 	if runner == nil {
 		runner = execRunner{}
+	}
+	healthChecks := options.healthChecks
+	if healthChecks == 0 {
+		healthChecks = 3
+	}
+	healthInterval := options.healthInterval
+	if healthInterval == 0 && options.healthChecks == 0 {
+		healthInterval = time.Second
 	}
 	client, err := newReleaseClient(configuration.Endpoint, options.HTTPClient)
 	if err != nil {
@@ -141,7 +152,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		restartErr := runCommand(ctx, runner, selected.start)
 		var healthErr error
 		if restartErr == nil {
-			healthErr = runCommand(ctx, runner, selected.health)
+			healthErr = waitForSustainedHealth(ctx, runner, selected.health, healthChecks, healthInterval)
 		}
 		if replaced {
 			if binaryErr != nil || serviceErr != nil || restartErr != nil || healthErr != nil {
@@ -169,8 +180,8 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	if err := runCommand(ctx, runner, selected.start); err != nil {
 		return Result{}, rollback(err)
 	}
-	if err := runCommand(ctx, runner, selected.health); err != nil {
-		return Result{}, rollback(fmt.Errorf("updated agent service did not become healthy: %w", err))
+	if err := waitForSustainedHealth(ctx, runner, selected.health, healthChecks, healthInterval); err != nil {
+		return Result{}, rollback(fmt.Errorf("updated agent service did not remain healthy: %w", err))
 	}
 	result.Updated = true
 	if options.Output != nil {
