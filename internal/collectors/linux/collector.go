@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	servicecollector "github.com/mriverodorta/homelab-inventory-agent/internal/collectors/services"
@@ -417,30 +416,13 @@ func (collector *Collector) collectFilesystems(metrics *protocol.Metrics, capabi
 		capabilities["host.filesystems"] = protocol.Capability{State: protocol.Disabled, Detail: "statfs disabled for fixture root"}
 		return
 	}
-	mounts := append([]string{"/"}, collector.filesystems...)
-	result := make([]map[string]any, 0, len(mounts))
-	failed := false
-	for _, mount := range mounts {
-		var status syscall.Statfs_t
-		if err := syscall.Statfs(mount, &status); err != nil {
-			failed = true
-			continue
-		}
-		blockSize := uint64(status.Bsize)
-		result = append(result, map[string]any{
-			"mountPoint": mount, "totalBytes": status.Blocks * blockSize,
-			"availableBytes": status.Bavail * blockSize, "freeBytes": status.Bfree * blockSize,
-			"usedBytes": (status.Blocks - status.Bfree) * blockSize,
-		})
-	}
+	result, err := collectMountedFilesystems("/proc/self/mountinfo")
 	metrics.Filesystems = result
-	if len(result) == 0 {
-		capabilities["host.filesystems"] = protocol.Capability{State: protocol.Unavailable, Detail: "configured filesystems are unavailable"}
-	} else if failed {
-		capabilities["host.filesystems"] = protocol.Capability{State: protocol.Available, Detail: "statfs; one or more configured filesystems unavailable"}
-	} else {
-		capabilities["host.filesystems"] = available("statfs")
+	if err != nil {
+		capabilities["host.filesystems"] = unavailable(err)
+		return
 	}
+	capabilities["host.filesystems"] = available("mountinfo and statfs")
 }
 
 func (collector *Collector) collectSensors(metrics *protocol.Metrics, capabilities map[string]protocol.Capability) {

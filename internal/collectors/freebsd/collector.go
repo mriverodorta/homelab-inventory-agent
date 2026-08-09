@@ -239,15 +239,19 @@ func (collector *Collector) collectMemory(ctx context.Context, values map[string
 }
 
 func (collector *Collector) collectFilesystems(ctx context.Context, metrics *protocol.Metrics, capabilities map[string]protocol.Capability) {
-	arguments := append([]string{"-kP", "/"}, collector.filesystems...)
-	body, err := collector.run(ctx, "/bin/df", arguments...)
+	body, err := collector.run(ctx, "/bin/df", "-kP")
 	if err != nil {
 		capabilities["host.filesystems"] = unavailable(err.Error())
 		return
 	}
-	metrics.Filesystems = parseDF(body)
+	mountBody, mountErr := collector.run(ctx, "/sbin/mount", "-p")
+	metrics.Filesystems = mergeFreeBSDMounts(parseDF(body), parseMountP(mountBody))
 	if len(metrics.Filesystems) == 0 {
 		capabilities["host.filesystems"] = unavailable("FreeBSD df returned no filesystems")
+	} else if mountErr != nil {
+		capabilities["host.filesystems"] = available("df; mount metadata unavailable")
+	} else {
+		capabilities["host.filesystems"] = available("df and mount")
 	}
 }
 

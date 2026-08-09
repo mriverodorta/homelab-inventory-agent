@@ -23,7 +23,12 @@ func scanLinux(ctx context.Context, runner command.Runner) ([]protocol.HardwareC
 		return nil, err
 	}
 	components := parseDMI(dmi)
-	lsblk, err := runBounded(ctx, runner, 10*time.Second, "/usr/bin/lsblk", "--json", "--bytes", "--output", "NAME,PATH,SIZE,TYPE,MODEL,VENDOR,SERIAL,WWN,TRAN,ROTA")
+	lsblk, err := runBounded(ctx, runner, 10*time.Second, "/usr/bin/lsblk", "--json", "--bytes", "--output", strings.Join([]string{
+		"NAME", "KNAME", "PATH", "SIZE", "TYPE", "MODEL", "VENDOR", "SERIAL", "WWN", "TRAN", "ROTA",
+		"PTTYPE", "PTUUID", "FSTYPE", "FSVER", "LABEL", "UUID", "MOUNTPOINTS", "PKNAME", "MAJ:MIN",
+		"RM", "RO", "DISC-GRAN", "DISC-MAX", "DISC-ZERO", "PARTTYPE", "PARTTYPENAME", "PARTUUID",
+		"PARTLABEL", "START",
+	}, ","))
 	if err == nil {
 		components = append(components, parseLSBLK(lsblk)...)
 	}
@@ -48,42 +53,56 @@ func parseLSBLK(body []byte) []protocol.HardwareComponent {
 	if json.Unmarshal(body, &payload) != nil {
 		return nil
 	}
-	var result []protocol.HardwareComponent
-	var visit func([]map[string]any)
-	visit = func(devices []map[string]any) {
-		for _, device := range devices {
-			if len(result) >= 128 {
-				return
-			}
-			children, _ := device["children"].([]any)
-			delete(device, "children")
-			kind := strings.ToLower(fmt.Sprint(device["type"]))
-			if kind == "disk" || kind == "rom" {
-				locator := boundedString(fmt.Sprint(device["path"]))
-				if locator == "" {
-					locator = boundedString(fmt.Sprint(device["name"]))
-				}
-				values := map[string]any{}
-				for key, value := range device {
-					if value != nil && fmt.Sprint(value) != "" {
-						values[fieldKey(key)] = value
-					}
-				}
-				result = append(result, protocol.HardwareComponent{Kind: "storage", Locator: locator, Values: values})
-			}
-			if len(children) > 0 {
-				nested := make([]map[string]any, 0, len(children))
-				for _, child := range children {
-					if record, ok := child.(map[string]any); ok {
-						nested = append(nested, record)
-					}
-				}
-				visit(nested)
-			}
+	result := make([]protocol.HardwareComponent, 0, len(payload.Devices))
+	for _, device := range payload.Devices {
+		if len(result) >= 128 {
+			break
 		}
+		kind := strings.ToLower(fmt.Sprint(device["type"]))
+		if kind != "disk" && kind != "rom" {
+			continue
+		}
+		locator := boundedString(fmt.Sprint(device["path"]))
+		if locator == "" {
+			locator = boundedString(fmt.Sprint(device["name"]))
+		}
+		result = append(result, protocol.HardwareComponent{
+			Kind: "storage", Locator: locator, Values: normalizeLSBLKNode(device, 0),
+		})
 	}
-	visit(payload.Devices)
 	return result
+}
+
+func normalizeLSBLKNode(device map[string]any, depth int) map[string]any {
+	values := map[string]any{}
+	for key, value := range device {
+		if value == nil || fmt.Sprint(value) == "" {
+			continue
+		}
+		if key == "children" {
+			if depth >= 4 {
+				continue
+			}
+			children, ok := value.([]any)
+			if !ok {
+				continue
+			}
+			normalized := make([]map[string]any, 0, min(len(children), 64))
+			for _, child := range children {
+				record, valid := child.(map[string]any)
+				if !valid || len(normalized) >= 64 {
+					continue
+				}
+				normalized = append(normalized, normalizeLSBLKNode(record, depth+1))
+			}
+			if len(normalized) > 0 {
+				values["children"] = normalized
+			}
+			continue
+		}
+		values[fieldKey(key)] = value
+	}
+	return values
 }
 
 func parseLinuxLinks(body []byte) []protocol.HardwareComponent {

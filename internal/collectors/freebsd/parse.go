@@ -3,6 +3,7 @@ package freebsd
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -155,6 +156,41 @@ func parseDF(body []byte) []map[string]any {
 		})
 	}
 	return result
+}
+
+type freeBSDMount struct {
+	source, mountPoint, fsType string
+	options                    []string
+}
+
+func parseMountP(body []byte) map[string]freeBSDMount {
+	result := map[string]freeBSDMount{}
+	for _, line := range strings.Split(strings.ReplaceAll(string(body), "\r\n", "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		result[fields[1]] = freeBSDMount{
+			source: fields[0], mountPoint: fields[1], fsType: fields[2], options: strings.Split(fields[3], ","),
+		}
+	}
+	return result
+}
+
+func mergeFreeBSDMounts(filesystems []map[string]any, mounts map[string]freeBSDMount) []map[string]any {
+	for _, filesystem := range filesystems {
+		mountPoint, _ := filesystem["mountPoint"].(string)
+		mount, found := mounts[mountPoint]
+		if !found {
+			continue
+		}
+		filesystem["source"] = mount.source
+		filesystem["fsType"] = mount.fsType
+		filesystem["root"] = "/"
+		filesystem["options"] = mount.options
+		filesystem["readOnly"] = slices.Contains(mount.options, "ro")
+	}
+	return filesystems
 }
 
 type networkCounters struct {
