@@ -37,8 +37,15 @@ func testContract(t *testing.T) protocol.Contract {
 func TestFetchContractUsesETagAndRejectsWrongSchema(t *testing.T) {
 	contract := testContract(t)
 	requests := 0
+	currentDigest, err := protocol.BundleDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requests++
+		if request.Header.Get("X-Homelab-Agent-Schema-Digest") != currentDigest {
+			t.Errorf("current schema digest was not advertised")
+		}
 		if request.Header.Get("If-None-Match") == `"current"` {
 			response.WriteHeader(http.StatusNotModified)
 			return
@@ -64,6 +71,23 @@ func TestFetchContractUsesETagAndRejectsWrongSchema(t *testing.T) {
 	_, _, _, err = client.FetchContract(context.Background(), "")
 	if err == nil || !strings.Contains(err.Error(), "incompatible") {
 		t.Fatalf("wrong schema accepted: %v", err)
+	}
+}
+
+func TestFetchContractAcceptsLegacySchemaDuringStaggeredUpgrade(t *testing.T) {
+	contract := testContract(t)
+	contract.SchemaBundleDigest = protocol.LegacyBundleDigest
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(response).Encode(contract)
+	}))
+	defer server.Close()
+	client, err := New(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	received, _, _, err := client.FetchContract(context.Background(), "")
+	if err != nil || received.SchemaBundleDigest != protocol.LegacyBundleDigest {
+		t.Fatalf("legacy contract rejected: %#v %v", received, err)
 	}
 }
 
@@ -101,7 +125,7 @@ func TestActivateAndSendSignedHeartbeat(t *testing.T) {
 			}
 			_, _ = io.Copy(io.Discard, reader)
 			response.Header().Set("Content-Type", "application/json")
-			_, _ = response.Write([]byte(`{"ok":true}`))
+			_, _ = response.Write([]byte(`{"ok":true,"sequence":1,"receivedAt":"2026-08-09T00:00:00Z","monitoringConfig":{"revision":1,"enabled":true,"serviceIntervalSeconds":60,"selectedServices":["docker.service"],"selectedContainers":[],"futurePolicyField":true},"futureResponseField":true}`))
 		default:
 			http.NotFound(response, request)
 		}
@@ -118,8 +142,12 @@ func TestActivateAndSendSignedHeartbeat(t *testing.T) {
 	writer := gzip.NewWriter(&body)
 	_, _ = writer.Write([]byte(`{"protocolMajor":1}`))
 	_ = writer.Close()
-	if err := client.SendHeartbeat(context.Background(), protocol.HostRef{Type: protocol.HostServer, ID: 3}, 8, privateKey, 1, []byte(body.String())); err != nil {
+	result, err := client.SendHeartbeat(context.Background(), protocol.HostRef{Type: protocol.HostServer, ID: 3}, 8, privateKey, 1, []byte(body.String()))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.MonitoringConfig == nil || result.MonitoringConfig.ServiceIntervalSeconds != 60 {
+		t.Fatalf("monitoring config missing: %#v", result)
 	}
 }
 

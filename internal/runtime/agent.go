@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/mriverodorta/homelab-inventory-agent/internal/buffer"
@@ -30,16 +31,19 @@ type backgroundCollector interface {
 var ErrRegistrationRevoked = errors.New("agent registration was revoked; the agent is dormant until it is enrolled again")
 
 type Agent struct {
-	config       config.Config
-	version      string
-	capabilities map[string]protocol.Capability
-	identity     *identity.Identity
-	queue        *buffer.Queue
-	client       *transport.Client
-	collector    Collector
-	contractPath string
-	dormantPath  string
-	onError      func(error)
+	config         config.Config
+	version        string
+	capabilities   map[string]protocol.Capability
+	identity       *identity.Identity
+	queue          *buffer.Queue
+	client         *transport.Client
+	collector      Collector
+	contractPath   string
+	monitoringPath string
+	monitoringMu   sync.RWMutex
+	monitoring     protocol.MonitoringConfig
+	dormantPath    string
+	onError        func(error)
 }
 
 type Options struct {
@@ -64,13 +68,51 @@ func New(options Options) (*Agent, error) {
 	if onError == nil {
 		onError = func(error) {}
 	}
-	return &Agent{
+	agent := &Agent{
 		config: options.Config, version: options.Version, capabilities: options.Capabilities,
 		identity: options.Identity, queue: options.Queue, client: options.Client,
-		collector:    options.Collector,
-		contractPath: filepath.Join(options.Config.StateDirectory, "contract.json"),
-		dormantPath:  filepath.Join(options.Config.StateDirectory, "dormant.json"), onError: onError,
-	}, nil
+		collector:      options.Collector,
+		contractPath:   filepath.Join(options.Config.StateDirectory, "contract.json"),
+		monitoringPath: filepath.Join(options.Config.StateDirectory, "monitoring-config.json"),
+		dormantPath:    filepath.Join(options.Config.StateDirectory, "dormant.json"), onError: onError,
+	}
+	monitoring, err := loadMonitoringConfig(agent.monitoringPath)
+	if err != nil {
+		return nil, fmt.Errorf("load monitoring config: %w", err)
+	}
+	agent.monitoring = monitoring
+	return agent, nil
+}
+
+func (a *Agent) effectiveContract(contract protocol.Contract) protocol.Contract {
+	a.monitoringMu.RLock()
+	defer a.monitoringMu.RUnlock()
+	if a.monitoring.Revision > 0 && a.monitoring.Enabled {
+		contract.Collection.ServiceIntervalSeconds = a.monitoring.ServiceIntervalSeconds
+	}
+	return contract
+}
+
+func (a *Agent) monitoringRevision() uint64 {
+	a.monitoringMu.RLock()
+	defer a.monitoringMu.RUnlock()
+	return a.monitoring.Revision
+}
+
+func (a *Agent) applyMonitoringConfig(config protocol.MonitoringConfig) error {
+	if err := protocol.ValidateMonitoringConfig(config); err != nil {
+		return err
+	}
+	a.monitoringMu.Lock()
+	defer a.monitoringMu.Unlock()
+	if config.Revision <= a.monitoring.Revision {
+		return nil
+	}
+	if err := writeMonitoringConfig(a.monitoringPath, config); err != nil {
+		return err
+	}
+	a.monitoring = config
+	return nil
 }
 
 func (a *Agent) dormant() bool {
@@ -193,7 +235,7 @@ func reportedDropped(body []byte) uint64 {
 }
 
 func (a *Agent) Collect(ctx context.Context, contract protocol.Contract) error {
-	heartbeat, err := a.collector.Collect(ctx, contract)
+	heartbeat, err := a.collector.Collect(ctx, a.effectiveContract(contract))
 	if err != nil {
 		return err
 	}
@@ -210,6 +252,13 @@ func (a *Agent) Collect(ctx context.Context, contract protocol.Contract) error {
 	heartbeat.AgentVersion = a.version
 	heartbeat.Host = a.config.Host
 	heartbeat.DroppedSamples = dropped
+	supportsMonitoring, err := protocol.SupportsMonitoringPolicy(contract.SchemaBundleDigest)
+	if err != nil {
+		return err
+	}
+	if supportsMonitoring {
+		heartbeat.MonitoringRevision = a.monitoringRevision()
+	}
 	if heartbeat.CollectedAt.IsZero() {
 		heartbeat.CollectedAt = time.Now().UTC()
 	}
@@ -218,6 +267,10 @@ func (a *Agent) Collect(ctx context.Context, contract protocol.Contract) error {
 	}
 	for name, capability := range a.capabilities {
 		heartbeat.Capabilities[name] = capability
+	}
+	heartbeat.Capabilities["notifications.monitoring-policy"] = protocol.Capability{
+		State:  protocol.Available,
+		Detail: "revisioned heartbeat-response policy",
 	}
 	if err := protocol.ValidateHeartbeat(heartbeat); err != nil {
 		return err
@@ -242,7 +295,8 @@ func (a *Agent) Flush(ctx context.Context) error {
 		return err
 	}
 	for _, entry := range entries {
-		if err := a.client.SendHeartbeat(ctx, a.config.Host, a.identity.DeviceID(), a.identity.PrivateKey(), entry.Sequence, entry.Body); err != nil {
+		response, err := a.client.SendHeartbeat(ctx, a.config.Host, a.identity.DeviceID(), a.identity.PrivateKey(), entry.Sequence, entry.Body)
+		if err != nil {
 			var endpointError *transport.HTTPError
 			if errors.As(err, &endpointError) && endpointError.StatusCode == 410 && endpointError.Code == "agent-registration-revoked" {
 				if persistErr := a.markDormant(); persistErr != nil {
@@ -252,6 +306,11 @@ func (a *Agent) Flush(ctx context.Context) error {
 			}
 			if !errors.As(err, &endpointError) || endpointError.StatusCode != 409 || endpointError.Code != "replayed-agent-request" {
 				return err
+			}
+		}
+		if response.MonitoringConfig != nil {
+			if err := a.applyMonitoringConfig(*response.MonitoringConfig); err != nil {
+				return fmt.Errorf("persist monitoring config: %w", err)
 			}
 		}
 		if err := a.queue.Remove(entry.Sequence); err != nil {

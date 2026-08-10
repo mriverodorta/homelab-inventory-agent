@@ -69,6 +69,14 @@ type Contract struct {
 	Privacy            PrivacyPolicy    `json:"privacy"`
 }
 
+type MonitoringConfig struct {
+	Revision               uint64   `json:"revision"`
+	Enabled                bool     `json:"enabled"`
+	ServiceIntervalSeconds int      `json:"serviceIntervalSeconds"`
+	SelectedServices       []string `json:"selectedServices"`
+	SelectedContainers     []string `json:"selectedContainers"`
+}
+
 type Activation struct {
 	ProtocolMajor int                   `json:"protocolMajor"`
 	AgentVersion  string                `json:"agentVersion"`
@@ -159,18 +167,19 @@ type HardwareSnapshot struct {
 }
 
 type Heartbeat struct {
-	ProtocolMajor  int                   `json:"protocolMajor"`
-	Sequence       uint64                `json:"sequence"`
-	AgentVersion   string                `json:"agentVersion"`
-	CollectedAt    time.Time             `json:"collectedAt"`
-	Host           HostRef               `json:"host"`
-	Hostname       string                `json:"hostname,omitempty"`
-	DroppedSamples uint64                `json:"droppedSamples,omitempty"`
-	Capabilities   map[string]Capability `json:"capabilities"`
-	Metrics        Metrics               `json:"metrics"`
-	Services       []Service             `json:"services,omitempty"`
-	Containers     []Container           `json:"containers,omitempty"`
-	StorageHealth  []StorageHealth       `json:"storageHealth,omitempty"`
+	ProtocolMajor      int                   `json:"protocolMajor"`
+	Sequence           uint64                `json:"sequence"`
+	AgentVersion       string                `json:"agentVersion"`
+	CollectedAt        time.Time             `json:"collectedAt"`
+	Host               HostRef               `json:"host"`
+	Hostname           string                `json:"hostname,omitempty"`
+	DroppedSamples     uint64                `json:"droppedSamples,omitempty"`
+	MonitoringRevision uint64                `json:"monitoringRevision,omitempty"`
+	Capabilities       map[string]Capability `json:"capabilities"`
+	Metrics            Metrics               `json:"metrics"`
+	Services           []Service             `json:"services,omitempty"`
+	Containers         []Container           `json:"containers,omitempty"`
+	StorageHealth      []StorageHealth       `json:"storageHealth,omitempty"`
 }
 
 var forbiddenContainerFields = []string{
@@ -310,6 +319,26 @@ func ValidateContract(contract Contract) error {
 	}
 	if contract.Privacy.RawHardwareIdentifiers {
 		return errors.New("normal telemetry cannot enable raw hardware identifiers")
+	}
+	return nil
+}
+
+func ValidateMonitoringConfig(config MonitoringConfig) error {
+	if config.Revision == 0 {
+		return errors.New("monitoring config revision is required")
+	}
+	if config.ServiceIntervalSeconds < 60 || config.ServiceIntervalSeconds > 3600 {
+		return errors.New("monitoring service interval is invalid")
+	}
+	if len(config.SelectedServices) > 512 || len(config.SelectedContainers) > 256 {
+		return errors.New("monitoring selection limit exceeded")
+	}
+	for _, values := range [][]string{config.SelectedServices, config.SelectedContainers} {
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" || len(value) > 512 {
+				return errors.New("monitoring selector is invalid")
+			}
+		}
 	}
 	return nil
 }

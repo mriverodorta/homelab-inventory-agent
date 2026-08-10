@@ -68,7 +68,8 @@ func agentHandler(failureFile, heartbeatMarker string) http.Handler {
 		defer request.Body.Close()
 		touch(heartbeatMarker)
 		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write([]byte(`{"ok":true}`))
+		sequence := request.Header.Get("X-Homelab-Agent-Sequence")
+		_, _ = response.Write([]byte(`{"ok":true,"sequence":` + sequence + `,"receivedAt":"2026-08-09T00:00:00Z"}`))
 	})
 	return mux
 }

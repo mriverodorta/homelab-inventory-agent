@@ -9,6 +9,8 @@ import (
 	"sort"
 )
 
+const LegacyBundleDigest = "6991de825d245d5906d64a137f51fd52ed820c97c5f093a0935434a0130c06ec"
+
 //go:embed *.schema.json
 var schemaFiles embed.FS
 
@@ -50,4 +52,20 @@ func BundleDigest() (string, error) {
 		_, _ = hash.Write([]byte{0})
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func IsCompatibleBundleDigest(value string) (bool, error) {
+	current, err := BundleDigest()
+	if err != nil {
+		return false, err
+	}
+	return value == current || value == LegacyBundleDigest, nil
+}
+
+func SupportsMonitoringPolicy(value string) (bool, error) {
+	current, err := BundleDigest()
+	if err != nil {
+		return false, err
+	}
+	return value == current, nil
 }

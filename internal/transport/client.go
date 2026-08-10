@@ -42,6 +42,13 @@ type ActivationResponse struct {
 	HeartbeatURL  string `json:"heartbeatUrl"`
 }
 
+type HeartbeatResponse struct {
+	OK               bool                       `json:"ok"`
+	ReceivedAt       string                     `json:"receivedAt"`
+	Sequence         uint64                     `json:"sequence"`
+	MonitoringConfig *protocol.MonitoringConfig `json:"monitoringConfig,omitempty"`
+}
+
 type Client struct {
 	endpoint   *url.URL
 	httpClient *http.Client
@@ -101,6 +108,17 @@ func decodeStrict(body []byte, destination any) error {
 	return nil
 }
 
+func decodeExtensible(body []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return errors.New("response contains trailing data")
+	}
+	return nil
+}
+
 func (c *Client) FetchContract(ctx context.Context, etag string) (protocol.Contract, string, bool, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.route("/api/agent/contracts/current"), nil)
 	if err != nil {
@@ -109,6 +127,11 @@ func (c *Client) FetchContract(ctx context.Context, etag string) (protocol.Contr
 	if etag != "" {
 		request.Header.Set("If-None-Match", etag)
 	}
+	digest, err := protocol.BundleDigest()
+	if err != nil {
+		return protocol.Contract{}, "", false, err
+	}
+	request.Header.Set("X-Homelab-Agent-Schema-Digest", digest)
 	response, err := c.httpClient.Do(request)
 	if err != nil {
 		return protocol.Contract{}, "", false, err
@@ -128,11 +151,11 @@ func (c *Client) FetchContract(ctx context.Context, etag string) (protocol.Contr
 	if err := protocol.ValidateContract(contract); err != nil {
 		return protocol.Contract{}, "", false, err
 	}
-	digest, err := protocol.BundleDigest()
+	compatible, err := protocol.IsCompatibleBundleDigest(contract.SchemaBundleDigest)
 	if err != nil {
 		return protocol.Contract{}, "", false, err
 	}
-	if contract.SchemaBundleDigest != digest {
+	if !compatible {
 		return protocol.Contract{}, "", false, errors.New("agent contract schema bundle is incompatible with this binary")
 	}
 	return contract, response.Header.Get("ETag"), false, nil
@@ -182,9 +205,9 @@ func CanonicalRequest(method, path, timestamp string, sequence uint64, bodyDiges
 	}, "\n"))
 }
 
-func (c *Client) sendSigned(ctx context.Context, path, contentType, contentEncoding string, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, body []byte) error {
+func (c *Client) sendSigned(ctx context.Context, path, contentType, contentEncoding string, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, body []byte) ([]byte, error) {
 	if deviceID == 0 || sequence == 0 || len(privateKey) != ed25519.PrivateKeySize || len(body) == 0 {
-		return errors.New("signed request input is invalid")
+		return nil, errors.New("signed request input is invalid")
 	}
 	timestamp := c.now().UTC().Format(time.RFC3339Nano)
 	digestBytes := sha256.Sum256(body)
@@ -192,7 +215,7 @@ func (c *Client) sendSigned(ctx context.Context, path, contentType, contentEncod
 	signature := ed25519.Sign(privateKey, CanonicalRequest(http.MethodPost, path, timestamp, sequence, digest))
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.route(path), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	request.Header.Set("Content-Type", contentType)
 	if contentEncoding != "" {
@@ -205,18 +228,33 @@ func (c *Client) sendSigned(ctx context.Context, path, contentType, contentEncod
 	request.Header.Set("X-Homelab-Agent-Signature", base64.StdEncoding.EncodeToString(signature))
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = readResponse(response)
-	return err
+	return readResponse(response)
 }
 
-func (c *Client) SendHeartbeat(ctx context.Context, host protocol.HostRef, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, compressedBody []byte) error {
+func (c *Client) SendHeartbeat(ctx context.Context, host protocol.HostRef, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, compressedBody []byte) (HeartbeatResponse, error) {
 	if err := protocol.ValidateHostRef(host); err != nil {
-		return err
+		return HeartbeatResponse{}, err
 	}
 	path := fmt.Sprintf("/api/agent/hosts/%s/%d/heartbeats", host.Type, host.ID)
-	return c.sendSigned(ctx, path, "application/json", "gzip", deviceID, privateKey, sequence, compressedBody)
+	body, err := c.sendSigned(ctx, path, "application/json", "gzip", deviceID, privateKey, sequence, compressedBody)
+	if err != nil {
+		return HeartbeatResponse{}, err
+	}
+	var result HeartbeatResponse
+	if err := decodeExtensible(body, &result); err != nil {
+		return HeartbeatResponse{}, fmt.Errorf("decode heartbeat response: %w", err)
+	}
+	if !result.OK || result.Sequence != sequence {
+		return HeartbeatResponse{}, errors.New("heartbeat response is invalid")
+	}
+	if result.MonitoringConfig != nil {
+		if err := protocol.ValidateMonitoringConfig(*result.MonitoringConfig); err != nil {
+			return HeartbeatResponse{}, fmt.Errorf("heartbeat monitoring config is invalid: %w", err)
+		}
+	}
+	return result, nil
 }
 
 func (c *Client) SendHardwareSnapshot(ctx context.Context, host protocol.HostRef, deviceID uint64, privateKey ed25519.PrivateKey, sequence uint64, body []byte) error {
@@ -224,5 +262,6 @@ func (c *Client) SendHardwareSnapshot(ctx context.Context, host protocol.HostRef
 		return err
 	}
 	path := fmt.Sprintf("/api/agent/hosts/%s/%d/hardware-snapshots", host.Type, host.ID)
-	return c.sendSigned(ctx, path, "application/json", "", deviceID, privateKey, sequence, body)
+	_, err := c.sendSigned(ctx, path, "application/json", "", deviceID, privateKey, sequence, body)
+	return err
 }

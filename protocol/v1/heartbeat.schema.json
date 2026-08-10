@@ -12,6 +12,7 @@
     "host": { "$ref": "common.schema.json#/$defs/hostRef" },
     "hostname": { "type": "string", "maxLength": 255 },
     "droppedSamples": { "type": "integer", "minimum": 0 },
+    "monitoringRevision": { "type": "integer", "minimum": 0 },
     "capabilities": {
       "type": "object",
       "maxProperties": 64,

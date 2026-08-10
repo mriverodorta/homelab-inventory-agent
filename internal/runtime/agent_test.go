@@ -118,7 +118,7 @@ func newRuntimeServer(t *testing.T, offlineSamples ...int) *runtimeServer {
 			_ = reader.Close()
 			state.sequences = append(state.sequences, heartbeat.Sequence)
 			state.droppedSeen = append(state.droppedSeen, heartbeat.DroppedSamples)
-			_, _ = response.Write([]byte(`{"ok":true}`))
+			_, _ = response.Write([]byte(fmt.Sprintf(`{"ok":true,"sequence":%d,"receivedAt":"2026-08-09T00:00:00Z"}`, sequence)))
 		case "/api/agent/hosts/server/1/hardware-snapshots":
 			state.mu.Lock()
 			defer state.mu.Unlock()
@@ -223,6 +223,24 @@ func TestAgentRefreshesIncompatibleContractCacheWithoutStaleETag(t *testing.T) {
 	}
 	if refreshed.ETag != `"current"` || refreshed.Contract.Revision != current.Revision {
 		t.Fatalf("current contract was not cached: %#v", refreshed)
+	}
+}
+
+func TestLegacyContractCacheRemainsUsableDuringStaggeredUpgrade(t *testing.T) {
+	directory := t.TempDir()
+	cachePath := filepath.Join(directory, "contract.json")
+	legacy := runtimeContract(t)
+	legacy.SchemaBundleDigest = protocol.LegacyBundleDigest
+	body, err := json.Marshal(cachedContract{ETag: `"legacy"`, Contract: legacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, append(body, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadContractCache(cachePath)
+	if err != nil || loaded.Contract.SchemaBundleDigest != protocol.LegacyBundleDigest {
+		t.Fatalf("legacy cache rejected: %#v %v", loaded, err)
 	}
 }
 

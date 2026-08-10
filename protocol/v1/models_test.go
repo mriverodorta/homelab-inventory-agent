@@ -80,6 +80,17 @@ func TestValidateContract(t *testing.T) {
 	}
 }
 
+func TestValidateMonitoringConfig(t *testing.T) {
+	config := MonitoringConfig{Revision: 1, Enabled: true, ServiceIntervalSeconds: 60, SelectedServices: []string{"docker.service"}, SelectedContainers: []string{"docker\\u0000compose\\u0000app"}}
+	if err := ValidateMonitoringConfig(config); err != nil {
+		t.Fatalf("valid monitoring config rejected: %v", err)
+	}
+	config.SelectedServices = []string{""}
+	if err := ValidateMonitoringConfig(config); err == nil {
+		t.Fatal("empty monitoring selector accepted")
+	}
+}
+
 func TestValidateHeartbeat(t *testing.T) {
 	heartbeat := validHeartbeat()
 	if err := ValidateHeartbeat(heartbeat); err != nil {
@@ -102,6 +113,22 @@ func TestValidateHeartbeat(t *testing.T) {
 	heartbeat.Services[0].Classification = "third-party"
 	if err := ValidateHeartbeat(heartbeat); err == nil {
 		t.Fatal("unsupported service classification was accepted")
+	}
+}
+
+func TestHeartbeatCarriesAppliedMonitoringRevision(t *testing.T) {
+	heartbeat := validHeartbeat()
+	heartbeat.MonitoringRevision = 7
+	payload, err := json.Marshal(heartbeat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Heartbeat
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.MonitoringRevision != 7 {
+		t.Fatalf("monitoring revision = %d, want 7", decoded.MonitoringRevision)
 	}
 }
 

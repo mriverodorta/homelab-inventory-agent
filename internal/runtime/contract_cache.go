@@ -32,11 +32,11 @@ func loadContractCache(filePath string) (cachedContract, error) {
 	if err := protocol.ValidateContract(value.Contract); err != nil {
 		return cachedContract{}, fmt.Errorf("cached contract is invalid: %w", err)
 	}
-	digest, err := protocol.BundleDigest()
+	compatible, err := protocol.IsCompatibleBundleDigest(value.Contract.SchemaBundleDigest)
 	if err != nil {
 		return cachedContract{}, fmt.Errorf("compute embedded contract schema digest: %w", err)
 	}
-	if value.Contract.SchemaBundleDigest != digest {
+	if !compatible {
 		return cachedContract{}, errContractCacheSchemaIncompatible
 	}
 	return value, nil
