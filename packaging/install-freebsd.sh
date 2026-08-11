@@ -223,6 +223,7 @@ if [ -z "$INSTALL_ROOT" ]; then
   sysrc homelab_inventory_agent_enable=YES >/dev/null
   service homelab_inventory_agent restart
   service_is_sustained_healthy || {
+    service homelab_inventory_agent onestatus >&2 || true
     echo "The updated agent service did not remain healthy; restoring the previous installation." >&2
     exit 70
   }

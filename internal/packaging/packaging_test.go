@@ -154,7 +154,14 @@ func TestFreeBSDInstallerUsesPersistentOPNsenseIdentityAndUnprivilegedRCd(t *tes
 		t.Fatalf("OPNsense configuration is unsafe: %s %v", config, err)
 	}
 	service, err := os.ReadFile(filepath.Join(installRoot, "usr/local/etc/rc.d/homelab_inventory_agent"))
-	if err != nil || !bytes.Contains(service, []byte("-u homelab-inventory-agent")) || bytes.Contains(service, []byte("configctl")) || bytes.Contains(service, []byte("/conf/config.xml")) {
+	if err != nil ||
+		!bytes.Contains(service, []byte("procname=/usr/sbin/daemon")) ||
+		!bytes.Contains(service, []byte("-P ${pidfile}")) ||
+		!bytes.Contains(service, []byte("agent_command=/usr/local/sbin/homelab-inventory-agent")) ||
+		!bytes.Contains(service, []byte("-u homelab-inventory-agent")) ||
+		bytes.Contains(service, []byte("procname=/usr/local/sbin/homelab-inventory-agent")) ||
+		bytes.Contains(service, []byte("configctl")) ||
+		bytes.Contains(service, []byte("/conf/config.xml")) {
 		t.Fatalf("OPNsense rc.d service is unsafe: %s %v", service, err)
 	}
 }
