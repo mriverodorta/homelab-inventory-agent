@@ -48,7 +48,7 @@ jobs:
       - uses: sigstore/cosign-installer@v4.1.2
       - name: Sign checksum manifest
         run: cosign sign-blob --yes --bundle dist/checksums.sigstore.json dist/checksums.txt
-      - uses: actions/attest-build-provenance@v4.1.1
+      - uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: 'dist/homelab-inventory-agent-*'
       - name: Publish GitHub release
