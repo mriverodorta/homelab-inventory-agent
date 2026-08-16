@@ -42,6 +42,9 @@ type Agent struct {
 	monitoringPath string
 	monitoringMu   sync.RWMutex
 	monitoring     protocol.MonitoringConfig
+	telemetryPath  string
+	telemetryMu    sync.Mutex
+	telemetry      telemetrySyncState
 	dormantPath    string
 	onError        func(error)
 }
@@ -74,6 +77,7 @@ func New(options Options) (*Agent, error) {
 		collector:      options.Collector,
 		contractPath:   filepath.Join(options.Config.StateDirectory, "contract.json"),
 		monitoringPath: filepath.Join(options.Config.StateDirectory, "monitoring-config.json"),
+		telemetryPath:  filepath.Join(options.Config.StateDirectory, "telemetry-sync.json"),
 		dormantPath:    filepath.Join(options.Config.StateDirectory, "dormant.json"), onError: onError,
 	}
 	monitoring, err := loadMonitoringConfig(agent.monitoringPath)
@@ -81,6 +85,11 @@ func New(options Options) (*Agent, error) {
 		return nil, fmt.Errorf("load monitoring config: %w", err)
 	}
 	agent.monitoring = monitoring
+	telemetry, err := loadTelemetrySyncState(agent.telemetryPath)
+	if err != nil {
+		return nil, fmt.Errorf("load telemetry sync state: %w", err)
+	}
+	agent.telemetry = telemetry
 	return agent, nil
 }
 
@@ -272,6 +281,20 @@ func (a *Agent) Collect(ctx context.Context, contract protocol.Contract) error {
 		State:  protocol.Available,
 		Detail: "revisioned heartbeat-response policy",
 	}
+	supportsCompact, err := protocol.SupportsCompactTelemetry(contract.SchemaBundleDigest)
+	if err != nil {
+		return err
+	}
+	nextTelemetry := a.telemetry
+	if supportsCompact {
+		a.telemetryMu.Lock()
+		compact, next, compactErr := buildCompactHeartbeat(heartbeat, a.telemetry)
+		a.telemetryMu.Unlock()
+		if compactErr != nil {
+			return compactErr
+		}
+		heartbeat, nextTelemetry = compact, next
+	}
 	if err := protocol.ValidateHeartbeat(heartbeat); err != nil {
 		return err
 	}
@@ -285,8 +308,18 @@ func (a *Agent) Collect(ctx context.Context, contract protocol.Contract) error {
 	if len(body) > contract.Limits.CompressedBytes {
 		return fmt.Errorf("compressed heartbeat exceeds contract limit of %d bytes", contract.Limits.CompressedBytes)
 	}
-	_, err = a.queue.Add(buffer.Entry{Sequence: sequence, Body: body})
-	return err
+	if _, err = a.queue.Add(buffer.Entry{Sequence: sequence, Body: body}); err != nil {
+		return err
+	}
+	if supportsCompact {
+		a.telemetryMu.Lock()
+		defer a.telemetryMu.Unlock()
+		if err := writeTelemetrySyncState(a.telemetryPath, nextTelemetry); err != nil {
+			return err
+		}
+		a.telemetry = nextTelemetry
+	}
+	return nil
 }
 
 func (a *Agent) Flush(ctx context.Context) error {
@@ -312,6 +345,22 @@ func (a *Agent) Flush(ctx context.Context) error {
 			if err := a.applyMonitoringConfig(*response.MonitoringConfig); err != nil {
 				return fmt.Errorf("persist monitoring config: %w", err)
 			}
+		}
+		if response.Telemetry != nil && (response.Telemetry.RequestCapabilities || len(response.Telemetry.Reconcile) > 0) {
+			a.telemetryMu.Lock()
+			if response.Telemetry.RequestCapabilities {
+				a.telemetry.CapabilitiesHash = ""
+			}
+			for _, family := range response.Telemetry.Reconcile {
+				state := a.telemetry.Families[family]
+				state.LastFullAt = time.Time{}
+				a.telemetry.Families[family] = state
+			}
+			if err := writeTelemetrySyncState(a.telemetryPath, a.telemetry); err != nil {
+				a.telemetryMu.Unlock()
+				return err
+			}
+			a.telemetryMu.Unlock()
 		}
 		if err := a.queue.Remove(entry.Sequence); err != nil {
 			return err

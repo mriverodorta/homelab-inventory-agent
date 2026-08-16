@@ -70,8 +70,8 @@ func (*Collector) Capabilities() map[string]protocol.Capability {
 		"host.cpu":               available("FreeBSD sysctl"),
 		"host.memory":            available("FreeBSD sysctl and swapinfo"),
 		"host.filesystems":       available("FreeBSD df"),
-		"host.disk-io":           available("FreeBSD iostat"),
-		"host.network":           available("FreeBSD netstat"),
+		"host.disk-io":           {State: protocol.Disabled, Detail: "continuous disk I/O collection is disabled"},
+		"host.network":           {State: protocol.Disabled, Detail: "continuous network collection is disabled"},
 		"host.pci":               {State: protocol.Unavailable, Detail: "PCI inventory not collected yet"},
 		"host.storage-inventory": {State: protocol.Unavailable, Detail: "disk inventory not collected yet"},
 		"host.sensors":           {State: protocol.Unavailable, Detail: "no readable FreeBSD sensor exposed"},
@@ -133,8 +133,7 @@ func (collector *Collector) Collect(ctx context.Context, contract protocol.Contr
 	collector.collectCPU(values, &metrics, capabilities)
 	collector.collectMemory(ctx, values, &metrics, capabilities)
 	collector.collectFilesystems(ctx, &metrics, capabilities)
-	collector.collectNetwork(ctx, elapsed, &metrics, capabilities)
-	collector.collectDisk(ctx, &metrics, capabilities)
+	_ = elapsed
 	collector.collectSensors(ctx, values, &metrics, capabilities)
 	collector.collectBattery(ctx, &metrics, capabilities)
 	collector.collectServices(ctx, contract, now, capabilities)
@@ -392,6 +391,9 @@ func (collector *Collector) collectServices(ctx context.Context, contract protoc
 		if err != nil {
 			collector.serviceState = unavailable(err.Error())
 		} else {
+			for index := range services {
+				services[index].Manager = "rcd"
+			}
 			collector.cachedServices = services[:min(len(services), 512)]
 			collector.serviceState = available("FreeBSD rc.d; process resource fields may be unavailable")
 		}

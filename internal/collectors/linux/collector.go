@@ -95,8 +95,8 @@ func (collector *Collector) Capabilities() map[string]protocol.Capability {
 		"host.cpu":         {State: protocol.Available, Detail: "procfs"},
 		"host.memory":      {State: protocol.Available, Detail: "procfs"},
 		"host.filesystems": {State: protocol.Available, Detail: "statfs"},
-		"host.disk-io":     {State: protocol.Available, Detail: "procfs"},
-		"host.network":     {State: protocol.Available, Detail: "procfs"},
+		"host.disk-io":     {State: protocol.Disabled, Detail: "continuous disk I/O collection is disabled"},
+		"host.network":     {State: protocol.Disabled, Detail: "continuous network collection is disabled"},
 		"host.sensors":     {State: protocol.Available, Detail: "sysfs when exposed"},
 		"host.batteries":   {State: protocol.Available, Detail: "sysfs when exposed"},
 		"host.services":    {State: protocol.Disabled, Detail: "service discovery is not enabled"},
@@ -153,8 +153,7 @@ func (collector *Collector) Collect(ctx context.Context, contract protocol.Contr
 	}
 	collector.collectCPU(&metrics, capabilities)
 	collector.collectMemory(&metrics, capabilities)
-	collector.collectNetwork(&metrics, capabilities, elapsed)
-	collector.collectDiskIO(&metrics, capabilities, elapsed)
+	_ = elapsed
 	collector.collectFilesystems(&metrics, capabilities)
 	collector.collectSensors(&metrics, capabilities)
 	collector.collectBatteries(&metrics, capabilities)
@@ -174,6 +173,9 @@ func (collector *Collector) Collect(ctx context.Context, contract protocol.Contr
 		if err != nil {
 			collector.serviceCapability = unavailable(err)
 		} else {
+			for index := range services {
+				services[index].Manager = "systemd"
+			}
 			collector.cachedServices = services
 			collector.serviceCapability = available("systemd")
 		}

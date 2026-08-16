@@ -99,6 +99,7 @@ type Metrics struct {
 }
 
 type Service struct {
+	Manager           string   `json:"manager,omitempty"`
 	Name              string   `json:"name"`
 	Description       string   `json:"description,omitempty"`
 	ActiveState       string   `json:"activeState"`
@@ -153,6 +154,23 @@ type StorageHealth struct {
 	Metrics     map[string]any `json:"metrics,omitempty"`
 }
 
+type StateFamily[T any] struct {
+	Revision uint64   `json:"revision"`
+	Full     bool     `json:"full"`
+	Changed  []T      `json:"changed"`
+	Removed  []string `json:"removed"`
+}
+
+type HeartbeatState struct {
+	Services      *StateFamily[Service]        `json:"services,omitempty"`
+	Containers    *StateFamily[Container]      `json:"containers,omitempty"`
+	Filesystems   *StateFamily[map[string]any] `json:"filesystems,omitempty"`
+	GPUs          *StateFamily[map[string]any] `json:"gpus,omitempty"`
+	Sensors       *StateFamily[map[string]any] `json:"sensors,omitempty"`
+	System        *StateFamily[map[string]any] `json:"system,omitempty"`
+	StorageHealth *StateFamily[StorageHealth]  `json:"storageHealth,omitempty"`
+}
+
 type HardwareComponent struct {
 	Kind    string         `json:"kind"`
 	Locator string         `json:"locator"`
@@ -175,8 +193,10 @@ type Heartbeat struct {
 	Hostname           string                `json:"hostname,omitempty"`
 	DroppedSamples     uint64                `json:"droppedSamples,omitempty"`
 	MonitoringRevision uint64                `json:"monitoringRevision,omitempty"`
-	Capabilities       map[string]Capability `json:"capabilities"`
+	Capabilities       map[string]Capability `json:"capabilities,omitempty"`
+	CapabilitiesHash   string                `json:"capabilitiesHash,omitempty"`
 	Metrics            Metrics               `json:"metrics"`
+	State              *HeartbeatState       `json:"state,omitempty"`
 	Services           []Service             `json:"services,omitempty"`
 	Containers         []Container           `json:"containers,omitempty"`
 	StorageHealth      []StorageHealth       `json:"storageHealth,omitempty"`
@@ -359,12 +379,39 @@ func ValidateHeartbeat(heartbeat Heartbeat) error {
 	if len(heartbeat.Hostname) > 255 || len(heartbeat.Services) > 512 || len(heartbeat.Containers) > 256 || len(heartbeat.StorageHealth) > 64 {
 		return errors.New("heartbeat collection limit exceeded")
 	}
+	if len(heartbeat.Capabilities) == 0 && !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(heartbeat.CapabilitiesHash) {
+		return errors.New("heartbeat capabilities or capability hash are required")
+	}
 	if len(heartbeat.Capabilities) > 64 {
 		return errors.New("heartbeat capability limit exceeded")
 	}
 	for name, capability := range heartbeat.Capabilities {
 		if !capabilityNamePattern.MatchString(name) || !validAvailability(capability.State) || len(capability.Detail) > 256 {
 			return fmt.Errorf("capability %q is invalid", name)
+		}
+	}
+	if heartbeat.State != nil {
+		families := []struct {
+			name     string
+			revision uint64
+			changed  int
+			removed  []string
+		}{
+			{"services", familyRevision(heartbeat.State.Services), familyLength(heartbeat.State.Services), familyRemoved(heartbeat.State.Services)},
+			{"containers", familyRevision(heartbeat.State.Containers), familyLength(heartbeat.State.Containers), familyRemoved(heartbeat.State.Containers)},
+			{"filesystems", familyRevision(heartbeat.State.Filesystems), familyLength(heartbeat.State.Filesystems), familyRemoved(heartbeat.State.Filesystems)},
+			{"gpus", familyRevision(heartbeat.State.GPUs), familyLength(heartbeat.State.GPUs), familyRemoved(heartbeat.State.GPUs)},
+			{"sensors", familyRevision(heartbeat.State.Sensors), familyLength(heartbeat.State.Sensors), familyRemoved(heartbeat.State.Sensors)},
+			{"system", familyRevision(heartbeat.State.System), familyLength(heartbeat.State.System), familyRemoved(heartbeat.State.System)},
+			{"storageHealth", familyRevision(heartbeat.State.StorageHealth), familyLength(heartbeat.State.StorageHealth), familyRemoved(heartbeat.State.StorageHealth)},
+		}
+		for _, family := range families {
+			if family.revision == 0 && (family.changed > 0 || family.removed != nil) {
+				return fmt.Errorf("heartbeat %s revision is required", family.name)
+			}
+			if family.changed > 512 || len(family.removed) > 512 {
+				return fmt.Errorf("heartbeat %s state limit exceeded", family.name)
+			}
 		}
 	}
 	if len(heartbeat.Metrics.LoadAverage) != 0 && len(heartbeat.Metrics.LoadAverage) != 3 {
@@ -446,6 +493,27 @@ func ValidateHeartbeat(heartbeat Heartbeat) error {
 		}
 	}
 	return nil
+}
+
+func familyRevision[T any](family *StateFamily[T]) uint64 {
+	if family == nil {
+		return 0
+	}
+	return family.Revision
+}
+
+func familyLength[T any](family *StateFamily[T]) int {
+	if family == nil {
+		return 0
+	}
+	return len(family.Changed)
+}
+
+func familyRemoved[T any](family *StateFamily[T]) []string {
+	if family == nil {
+		return nil
+	}
+	return family.Removed
 }
 
 func ValidateHardwareSnapshot(snapshot HardwareSnapshot) error {

@@ -89,7 +89,7 @@ func TestCollectorProducesBoundedFreeBSDTelemetryWithoutPrivateInterfaces(t *tes
 	if got := heartbeat.Metrics.Memory["totalBytes"]; got != uint64(17179869184) {
 		t.Fatalf("memory parse mismatch: %#v", heartbeat.Metrics.Memory)
 	}
-	if len(heartbeat.Metrics.Filesystems) != 2 || len(heartbeat.Metrics.Network) != 3 || len(heartbeat.Metrics.DiskIO) != 1 || len(heartbeat.Metrics.Sensors) != 3 || len(heartbeat.Metrics.Batteries) != 1 {
+	if len(heartbeat.Metrics.Filesystems) != 2 || len(heartbeat.Metrics.Network) != 0 || len(heartbeat.Metrics.DiskIO) != 0 || len(heartbeat.Metrics.Sensors) != 3 || len(heartbeat.Metrics.Batteries) != 1 {
 		t.Fatalf("metric collections missing: %#v", heartbeat.Metrics)
 	}
 	if len(heartbeat.Services) != 1 || heartbeat.Services[0].Name != "dnsmasq" {
@@ -104,7 +104,7 @@ func TestCollectorProducesBoundedFreeBSDTelemetryWithoutPrivateInterfaces(t *tes
 	}
 }
 
-func TestCollectorCalculatesCPUAndNetworkRatesOnSubsequentSamples(t *testing.T) {
+func TestCollectorCalculatesCPUWithoutCollectingNetworkRates(t *testing.T) {
 	coreCommand := strings.Join(append([]string{"/sbin/sysctl"}, coreSysctlKeys...), " ")
 	sensorCommand := strings.Join(append([]string{"/sbin/sysctl"}, sensorSysctlKeys(1)...), " ")
 	runner := &sequenceRunner{responses: map[string][][]byte{
@@ -139,8 +139,8 @@ func TestCollectorCalculatesCPUAndNetworkRatesOnSubsequentSamples(t *testing.T) 
 	if got := heartbeat.Metrics.CPU["percent"]; got != float64(30) {
 		t.Fatalf("CPU delta mismatch: %#v", heartbeat.Metrics.CPU)
 	}
-	if got := heartbeat.Metrics.Network[1]["receiveBytesPerSecond"]; got != float64(100) {
-		t.Fatalf("network delta mismatch: %#v", heartbeat.Metrics.Network)
+	if len(heartbeat.Metrics.Network) != 0 {
+		t.Fatalf("network telemetry must remain disabled: %#v", heartbeat.Metrics.Network)
 	}
 }
 

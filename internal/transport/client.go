@@ -47,6 +47,14 @@ type HeartbeatResponse struct {
 	ReceivedAt       string                     `json:"receivedAt"`
 	Sequence         uint64                     `json:"sequence"`
 	MonitoringConfig *protocol.MonitoringConfig `json:"monitoringConfig,omitempty"`
+	Telemetry        *TelemetryAcknowledgement  `json:"telemetry,omitempty"`
+}
+
+type TelemetryAcknowledgement struct {
+	Duplicate           bool              `json:"duplicate"`
+	AcceptedRevisions   map[string]uint64 `json:"acceptedRevisions"`
+	Reconcile           []string          `json:"reconcile"`
+	RequestCapabilities bool              `json:"requestCapabilities"`
 }
 
 type Client struct {

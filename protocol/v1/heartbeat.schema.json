@@ -3,7 +3,11 @@
   "$id": "https://homelabinventory.com/schemas/agent/v1/heartbeat.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["protocolMajor", "sequence", "agentVersion", "collectedAt", "host", "capabilities", "metrics"],
+  "required": ["protocolMajor", "sequence", "agentVersion", "collectedAt", "host", "metrics"],
+  "anyOf": [
+    { "required": ["capabilities"] },
+    { "required": ["capabilitiesHash"] }
+  ],
   "properties": {
     "protocolMajor": { "const": 1 },
     "sequence": { "type": "integer", "minimum": 1 },
@@ -18,6 +22,7 @@
       "maxProperties": 64,
       "additionalProperties": { "$ref": "common.schema.json#/$defs/capability" }
     },
+    "capabilitiesHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "metrics": { "$ref": "metrics.schema.json" },
     "services": {
       "type": "array",
@@ -33,6 +38,56 @@
       "type": "array",
       "maxItems": 64,
       "items": { "$ref": "storage-health.schema.json" }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "services": { "$ref": "#/$defs/serviceState" },
+        "containers": { "$ref": "#/$defs/containerState" },
+        "filesystems": { "$ref": "#/$defs/objectState" },
+        "gpus": { "$ref": "#/$defs/objectState" },
+        "sensors": { "$ref": "#/$defs/objectState" },
+        "system": { "$ref": "#/$defs/objectState" },
+        "storageHealth": { "$ref": "#/$defs/storageHealthState" }
+      }
+    }
+  },
+  "$defs": {
+    "stateBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "full", "changed", "removed"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "full": { "type": "boolean" },
+        "changed": { "type": "array", "maxItems": 512 },
+        "removed": { "type": "array", "maxItems": 512, "items": { "type": "string", "maxLength": 512 } }
+      }
+    },
+    "serviceState": {
+      "allOf": [
+        { "$ref": "#/$defs/stateBase" },
+        { "properties": { "changed": { "type": "array", "maxItems": 512, "items": { "$ref": "service.schema.json" } } } }
+      ]
+    },
+    "containerState": {
+      "allOf": [
+        { "$ref": "#/$defs/stateBase" },
+        { "properties": { "changed": { "type": "array", "maxItems": 256, "items": { "$ref": "container.schema.json" } } } }
+      ]
+    },
+    "objectState": {
+      "allOf": [
+        { "$ref": "#/$defs/stateBase" },
+        { "properties": { "changed": { "type": "array", "maxItems": 512, "items": { "type": "object" } } } }
+      ]
+    },
+    "storageHealthState": {
+      "allOf": [
+        { "$ref": "#/$defs/stateBase" },
+        { "properties": { "changed": { "type": "array", "maxItems": 64, "items": { "$ref": "storage-health.schema.json" } } } }
+      ]
     }
   }
 }

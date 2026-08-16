@@ -9,7 +9,7 @@ The project is under active development. Homelab Inventory builds and embeds a p
 - Outbound-only communication to one Homelab Inventory compute host.
 - Ed25519 request authentication with replay protection.
 - An unprivileged background service on Linux and FreeBSD.
-- One-minute historical telemetry by default, without a one-second realtime stream.
+- Exactly 30 one-minute CPU, memory, and heartbeat slots, without a one-second realtime stream.
 - Explicit opt-in for container and SMART collection.
 - No remote command execution, shell plugins, process command lines, environment variables, container secrets, or host mount paths.
 - A separate, explicit `sudo homelab-inventory-agent inventory` workflow for reviewed one-time hardware discovery.
@@ -19,7 +19,7 @@ The capability baseline was informed by an implementation review of Beszel v0.18
 
 ## Current Linux telemetry
 
-The Linux collector reads procfs, sysfs, mountinfo, `statfs`, and a bounded `systemctl show` projection. It reports CPU totals and per-core deltas, CPU state breakdown, load, memory and swap, ZFS ARC, mounted-filesystem usage and source metadata, disk I/O, aggregate and per-interface network traffic, temperature sensors, batteries, systemd services, and safe DRM GPU metrics. Service records identify locally installed or manually installed units separately from operating-system units when the host exposes enough package ownership data. GPU readings are sampled in memory at the contract cadence and averaged into the normal one-minute heartbeat; no high-frequency series is transmitted or persisted.
+The Linux collector reads procfs, sysfs, mountinfo, `statfs`, and a bounded `systemctl show` projection. Normal heartbeats report aggregate CPU state, load, memory and swap, ZFS ARC, filtered local filesystem usage, a CPU temperature average, one sensor per NVMe device, batteries, systemd services, and safe DRM GPU metrics. Per-core CPU, network, and disk-I/O telemetry are not collected for normal delivery. Service records identify locally installed or manually installed units separately from operating-system units when the host exposes enough package ownership data. GPU readings are sampled in memory at the contract cadence and averaged into the normal one-minute heartbeat; no high-frequency series is transmitted or persisted.
 
 eMMC and mdraid health use read-only sysfs. SMART is collected only when the application contract enables it and the local configuration explicitly allowlists normalized `/dev/...` paths. The fixed `smartctl -n standby,0 -a -j` invocation has a timeout and output limit and does not wake standby disks. Serial numbers and WWNs are discarded; device references are installation-specific HMAC identifiers.
 
@@ -74,7 +74,7 @@ The current protocol bundle defines activation, one-minute heartbeats, bounded h
 
 Heartbeat acknowledgements can include a revisioned monitoring policy for notification-selected services and containers. The agent validates and atomically persists only newer revisions in `monitoring-config.json` with mode `0600`, then reports the applied revision on later outbound heartbeats so the application can distinguish pending from active policy. Selected services use a one-minute collection interval; when none are selected, service discovery retains its normal ten-minute cadence. The policy contains stable resource keys only, never notification destinations, credentials, or remote commands, and survives agent restarts without changing device identity or queued telemetry.
 
-Application persistence is intentionally split: device enrollment and latest compatibility status remain in relational JSON stores during the database transition, while historical samples and latest telemetry projections live in an independent WAL-mode SQLite database. No heartbeat is acknowledged until telemetry persistence succeeds.
+Application persistence is intentionally split: enrollment belongs to the core relational database while exactly 30 CPU/memory slots, current component state, and meaningful transitions live in an independent WAL-mode SQLite database. The agent hashes its capabilities and state families, sends only changes between six-hour full reconciliations, and atomically persists acknowledged revisions in `telemetry-sync.json` with mode `0600`. The application can request capabilities or a family reconciliation only in the response to an agent-initiated heartbeat. No heartbeat is acknowledged until telemetry persistence succeeds.
 
 ## Linux packaging
 
@@ -117,7 +117,7 @@ When an administrator unlinks a host in Homelab Inventory, the revoked agent rec
 
 ## FreeBSD and OPNsense
 
-FreeBSD AMD64 uses the same signed, outbound-only protocol and one-minute heartbeat cadence. The collector reads bounded output from fixed `sysctl`, `df`, `netstat`, `iostat`, `pciconf`, `geom`, and rc.d status commands. It does not call `configctl`, inspect `/conf/config.xml`, or collect firewall, VPN, routing, gateway, CARP, or NAT state. OPNsense is treated only as a generic FreeBSD host.
+FreeBSD AMD64 uses the same signed, outbound-only protocol and one-minute heartbeat cadence. The normal collector reads bounded output from fixed `sysctl`, `df`, and rc.d status commands; network and disk-I/O history are disabled. Reviewed hardware inventory can use sanitized `pciconf` and `geom` data separately. It does not call `configctl`, inspect `/conf/config.xml`, or collect firewall, VPN, routing, gateway, CARP, or NAT state. OPNsense is treated only as a generic FreeBSD host.
 
 The normal service remains unprivileged. When FreeBSD hardening hides other users' processes, the agent reports process and per-service resource visibility as permission-blocked and omits those values instead of reporting misleading zeros. PCI and disk descriptions are sanitized before transmission; GEOM identifiers and LUN identifiers are discarded.
 

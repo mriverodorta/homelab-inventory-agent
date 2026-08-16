@@ -34,7 +34,7 @@ func TestEmbeddedSchemasAreValidAndDigestIsStable(t *testing.T) {
 	if first != second || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(first) {
 		t.Fatalf("bundle digest is not deterministic: %q / %q", first, second)
 	}
-	if first != "97ea85ea215e8d35d2cf8c70c24d715d79e092391dd57f70b6b54ef9717e7495" {
+	if first != "0e1749bf18a921f89334410d61ce95ebd0d001c6ed30ef6ae4655c90e1180554" {
 		t.Fatalf("canonical bundle changed without updating the pinned application contract: %q", first)
 	}
 }
@@ -44,7 +44,7 @@ func TestBundleCompatibilityAllowsStaggeredApplicationAndAgentUpgrades(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, digest := range []string{current, LegacyBundleDigest} {
+	for _, digest := range []string{current, PreviousBundleDigest, IntermediateBundleDigest, LegacyBundleDigest} {
 		compatible, checkErr := IsCompatibleBundleDigest(digest)
 		if checkErr != nil || !compatible {
 			t.Fatalf("compatible digest %q rejected: %v", digest, checkErr)

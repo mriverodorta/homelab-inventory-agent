@@ -5,6 +5,7 @@
   "additionalProperties": false,
   "required": ["name", "activeState"],
   "properties": {
+    "manager": { "type": "string", "enum": ["systemd", "rcd"] },
     "name": { "type": "string", "minLength": 1, "maxLength": 256 },
     "description": { "type": "string", "maxLength": 512 },
     "activeState": { "type": "string", "maxLength": 64 },
