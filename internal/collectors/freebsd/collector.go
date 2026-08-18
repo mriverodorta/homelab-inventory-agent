@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -18,7 +19,9 @@ import (
 var coreSysctlKeys = []string{
 	"kern.osrelease", "hw.machine_arch", "hw.model", "hw.ncpu", "hw.physmem", "kern.boottime", "vm.loadavg",
 	"kern.cp_time", "kern.cp_times", "vm.stats.vm.v_page_size", "vm.stats.vm.v_free_count",
-	"vm.stats.vm.v_inactive_count", "vm.stats.vm.v_cache_count", "kstat.zfs.misc.arcstats.size",
+	"vm.stats.vm.v_page_count", "vm.stats.vm.v_active_count", "vm.stats.vm.v_inactive_count",
+	"vm.stats.vm.v_cache_count", "vm.stats.vm.v_laundry_count", "vm.stats.vm.v_wire_count",
+	"kstat.zfs.misc.arcstats.size",
 }
 
 type serviceCollector interface {
@@ -210,23 +213,39 @@ func (collector *Collector) collectCPU(values map[string]string, metrics *protoc
 func (collector *Collector) collectMemory(ctx context.Context, values map[string]string, metrics *protocol.Metrics, capabilities map[string]protocol.Capability) {
 	total, totalOK := parseUint(values["hw.physmem"])
 	pageSize, pageOK := parseUint(values["vm.stats.vm.v_page_size"])
+	pageCount, pageCountOK := parseUint(values["vm.stats.vm.v_page_count"])
 	freePages, freeOK := parseUint(values["vm.stats.vm.v_free_count"])
 	inactivePages, inactiveOK := parseUint(values["vm.stats.vm.v_inactive_count"])
 	cachePages, _ := parseUint(values["vm.stats.vm.v_cache_count"])
-	if !totalOK || !pageOK || !freeOK || !inactiveOK || pageSize == 0 {
+	laundryPages, _ := parseUint(values["vm.stats.vm.v_laundry_count"])
+	if !totalOK || !pageOK || !pageCountOK || !freeOK || !inactiveOK || pageSize == 0 || pageCount == 0 {
 		capabilities["host.memory"] = unavailable("FreeBSD memory counters are incomplete")
 		return
 	}
-	availablePages := freePages + inactivePages + cachePages
-	availableBytes := availablePages * pageSize
-	if availableBytes > total {
-		availableBytes = total
+	reclaimablePages := freePages + inactivePages + cachePages + laundryPages
+	if reclaimablePages > pageCount {
+		capabilities["host.memory"] = unavailable("FreeBSD memory counters are inconsistent")
+		return
 	}
+	usedBeforeARC := float64(pageCount-reclaimablePages) * float64(total) / float64(pageCount)
+	arc, hasARC := parseUint(values["kstat.zfs.misc.arcstats.size"])
+	used := math.Max(0, usedBeforeARC-float64(arc))
+	used = math.Min(used, float64(total))
+	usedBytes := uint64(math.Round(used))
 	memory := map[string]any{
-		"totalBytes": total, "availableBytes": availableBytes, "usedBytes": total - availableBytes,
-		"usedPercent": float64(total-availableBytes) * 100 / float64(total),
+		"totalBytes": total, "availableBytes": total - usedBytes, "usedBytes": usedBytes,
+		"usedPercent":   float64(usedBytes) * 100 / float64(total),
+		"pageSizeBytes": pageSize, "pageCount": pageCount, "inactivePages": inactivePages,
+		"cachePages": cachePages, "laundryPages": laundryPages, "freePages": freePages,
 	}
-	if arc, ok := parseUint(values["kstat.zfs.misc.arcstats.size"]); ok {
+	for source, target := range map[string]string{
+		"vm.stats.vm.v_active_count": "activePages", "vm.stats.vm.v_wire_count": "wiredPages",
+	} {
+		if value, exists := parseUint(values[source]); exists {
+			memory[target] = value
+		}
+	}
+	if hasARC {
 		memory["zfsArcBytes"] = arc
 	}
 	if body, err := collector.run(ctx, "/usr/sbin/swapinfo", "-k"); err == nil {

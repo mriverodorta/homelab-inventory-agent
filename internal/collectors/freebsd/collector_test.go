@@ -47,9 +47,13 @@ func TestCollectorProducesBoundedFreeBSDTelemetryWithoutPrivateInterfaces(t *tes
 			"kern.cp_time: 100 10 40 5 845",
 			"kern.cp_times: 25 2 10 1 212 25 3 10 1 211 25 2 10 2 211 25 3 10 1 211",
 			"vm.stats.vm.v_page_size: 4096",
+			"vm.stats.vm.v_page_count: 4194304",
+			"vm.stats.vm.v_active_count: 500000",
 			"vm.stats.vm.v_free_count: 100000",
 			"vm.stats.vm.v_inactive_count: 200000",
 			"vm.stats.vm.v_cache_count: 50000",
+			"vm.stats.vm.v_laundry_count: 25000",
+			"vm.stats.vm.v_wire_count: 800000",
 			"kstat.zfs.misc.arcstats.size: 536870912",
 		}, "\n")),
 		"/usr/sbin/swapinfo -k":   []byte("Device 1K-blocks Used Avail Capacity\n/dev/nda0p3 2097152 524288 1572864 25%\n"),
@@ -89,6 +93,15 @@ func TestCollectorProducesBoundedFreeBSDTelemetryWithoutPrivateInterfaces(t *tes
 	if got := heartbeat.Metrics.Memory["totalBytes"]; got != uint64(17179869184) {
 		t.Fatalf("memory parse mismatch: %#v", heartbeat.Metrics.Memory)
 	}
+	for key, expected := range map[string]uint64{
+		"pageSizeBytes": 4096, "pageCount": 4194304, "activePages": 500000,
+		"inactivePages": 200000, "cachePages": 50000, "laundryPages": 25000,
+		"wiredPages": 800000, "freePages": 100000,
+	} {
+		if heartbeat.Metrics.Memory[key] != expected {
+			t.Fatalf("FreeBSD memory counter %s mismatch: %#v", key, heartbeat.Metrics.Memory)
+		}
+	}
 	if len(heartbeat.Metrics.Filesystems) != 2 || len(heartbeat.Metrics.Network) != 0 || len(heartbeat.Metrics.DiskIO) != 0 || len(heartbeat.Metrics.Sensors) != 3 || len(heartbeat.Metrics.Batteries) != 1 {
 		t.Fatalf("metric collections missing: %#v", heartbeat.Metrics)
 	}
@@ -101,6 +114,58 @@ func TestCollectorProducesBoundedFreeBSDTelemetryWithoutPrivateInterfaces(t *tes
 				t.Fatalf("collector invoked forbidden interface %q", call)
 			}
 		}
+	}
+}
+
+func TestCollectorCalculatesOPNsenseMemoryPressureAndAllowsMissingZFS(t *testing.T) {
+	tests := []struct {
+		name            string
+		values          map[string]string
+		expectedPercent float64
+		expectsARC      bool
+	}{
+		{
+			name: "SkyGate with ZFS ARC",
+			values: map[string]string{
+				"hw.physmem": "17016328192", "vm.stats.vm.v_page_size": "4096",
+				"vm.stats.vm.v_page_count": "4043814", "vm.stats.vm.v_active_count": "346136",
+				"vm.stats.vm.v_inactive_count": "1684534", "vm.stats.vm.v_cache_count": "0",
+				"vm.stats.vm.v_laundry_count": "12409", "vm.stats.vm.v_wire_count": "1830979",
+				"vm.stats.vm.v_free_count": "165396", "kstat.zfs.misc.arcstats.size": "4413015560",
+			},
+			expectedPercent: 28.01,
+			expectsARC:      true,
+		},
+		{
+			name: "FreeBSD without ZFS",
+			values: map[string]string{
+				"hw.physmem": "4096000", "vm.stats.vm.v_page_size": "4096",
+				"vm.stats.vm.v_page_count": "1000", "vm.stats.vm.v_active_count": "300",
+				"vm.stats.vm.v_inactive_count": "300", "vm.stats.vm.v_cache_count": "0",
+				"vm.stats.vm.v_laundry_count": "50", "vm.stats.vm.v_wire_count": "250",
+				"vm.stats.vm.v_free_count": "100",
+			},
+			expectedPercent: 55,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &fixtureRunner{responses: map[string][]byte{
+				"/usr/sbin/swapinfo -k": []byte("Device 1K-blocks Used Avail Capacity\n"),
+			}}
+			collector := New(Options{Runner: runner, Services: &serviceFixture{}})
+			metrics := protocol.Metrics{}
+			capabilities := collector.Capabilities()
+			collector.collectMemory(context.Background(), test.values, &metrics, capabilities)
+			percent, ok := metrics.Memory["usedPercent"].(float64)
+			if !ok || percent < test.expectedPercent-0.01 || percent > test.expectedPercent+0.01 {
+				t.Fatalf("pressure mismatch: got %#v expected %.2f", metrics.Memory, test.expectedPercent)
+			}
+			_, hasARC := metrics.Memory["zfsArcBytes"]
+			if hasARC != test.expectsARC {
+				t.Fatalf("ARC presence mismatch: %#v", metrics.Memory)
+			}
+		})
 	}
 }
 
