@@ -54,7 +54,7 @@ func writeBaseFixtures(t *testing.T, root string, cpuUser uint64) {
 	fixture(t, root, "proc/uptime", "1234.50 100.00\n")
 	fixture(t, root, "proc/loadavg", "0.10 0.20 0.30 1/100 22\n")
 	fixture(t, root, "proc/stat", "cpu  "+uint(cpuUser)+" 0 50 850 0 0 0 0 0 0\ncpu0 "+uint(cpuUser)+" 0 50 850 0 0 0 0 0 0\n")
-	fixture(t, root, "proc/meminfo", "MemTotal: 1000 kB\nMemAvailable: 400 kB\nBuffers: 10 kB\nCached: 100 kB\nSwapTotal: 200 kB\nSwapFree: 150 kB\n")
+	fixture(t, root, "proc/meminfo", "MemTotal: 1000 kB\nMemFree: 200 kB\nMemAvailable: 400 kB\nBuffers: 10 kB\nCached: 100 kB\nSReclaimable: 25 kB\nShmem: 5 kB\nSwapTotal: 200 kB\nSwapFree: 150 kB\n")
 	fixture(t, root, "proc/net/dev", "Inter-| Receive | Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\neth0: 1000 10 0 0 0 0 0 0 2000 20 0 0 0 0 0 0\n")
 	fixture(t, root, "proc/diskstats", "8 0 sda 10 0 20 5 30 0 40 6 0 11 0 0 0 0 0 0\n")
 	fixture(t, root, "proc/cpuinfo", "processor : 0\nphysical id : 0\ncore id : 0\nmodel name : Example CPU\n\n")
@@ -89,6 +89,13 @@ func TestCollectorReadsProcAndSysfsWithoutInventingInitialRates(t *testing.T) {
 	if first.Metrics.Memory["usedBytes"] != uint64(600*1024) {
 		t.Fatalf("memory mismatch: %#v", first.Metrics.Memory)
 	}
+	for key, expected := range map[string]uint64{
+		"freeBytes": 200 * 1024, "reclaimableBytes": 25 * 1024, "sharedBytes": 5 * 1024,
+	} {
+		if first.Metrics.Memory[key] != expected {
+			t.Fatalf("memory counter %s mismatch: %#v", key, first.Metrics.Memory)
+		}
+	}
 	if first.Metrics.System["distribution"] != "example" || first.Metrics.CPU["model"] != "Example CPU" {
 		t.Fatalf("static host profile mismatch: system=%#v cpu=%#v", first.Metrics.System, first.Metrics.CPU)
 	}
@@ -109,11 +116,26 @@ func TestCollectorReadsProcAndSysfsWithoutInventingInitialRates(t *testing.T) {
 	if !ok || percent <= 0 || percent > 100 {
 		t.Fatalf("CPU delta mismatch: %#v", second.Metrics.CPU)
 	}
-	if _, ok := second.Metrics.Network[0]["receiveBytesPerSecond"]; !ok {
-		t.Fatalf("network rate missing: %#v", second.Metrics.Network)
+	if len(second.Metrics.Network) != 0 {
+		t.Fatalf("continuous network telemetry must remain disabled: %#v", second.Metrics.Network)
 	}
 	if _, ok := second.Metrics.CPU["userPercent"]; !ok {
 		t.Fatalf("CPU breakdown missing: %#v", second.Metrics.CPU)
+	}
+}
+
+func TestParseMeminfoOmitsMissingOptionalPressureCounters(t *testing.T) {
+	memory, err := parseMeminfo([]byte("MemTotal: 1000 kB\nMemAvailable: 400 kB\nBuffers: 10 kB\nCached: 100 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"freeBytes", "reclaimableBytes", "sharedBytes"} {
+		if _, exists := memory[key]; exists {
+			t.Fatalf("missing optional counter %s was fabricated: %#v", key, memory)
+		}
+	}
+	if memory["usedPercent"] != float64(60) {
+		t.Fatalf("memory pressure must remain based on MemAvailable: %#v", memory)
 	}
 }
 

@@ -113,6 +113,13 @@ func parseMeminfo(body []byte) (map[string]any, error) {
 		"usedPercent":    float64(total-available) * 100 / float64(total),
 		"swapTotalBytes": values["SwapTotal"], "swapFreeBytes": values["SwapFree"],
 	}
+	for source, target := range map[string]string{
+		"MemFree": "freeBytes", "SReclaimable": "reclaimableBytes", "Shmem": "sharedBytes",
+	} {
+		if value, exists := values[source]; exists {
+			result[target] = value
+		}
+	}
 	if swapTotal := values["SwapTotal"]; swapTotal > 0 {
 		swapUsed := swapTotal - values["SwapFree"]
 		result["swapUsedBytes"] = swapUsed
