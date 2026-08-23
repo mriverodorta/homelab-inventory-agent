@@ -150,17 +150,22 @@ verify_checksum() {
   path=$2
   expected=$(awk -v file="$file" '$NF == file || $NF == "*" file { print $1 }' "$temporary/checksums.txt")
   [ -n "$expected" ] || { echo "Checksum for $file is missing." >&2; exit 65; }
-  actual=$(sha256 -q "$path")
+  if command -v sha256 >/dev/null 2>&1; then
+    actual=$(sha256 -q "$path")
+  elif command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$path" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$path" | awk '{print $1}')
+  else
+    echo "A SHA-256 utility is required." >&2
+    exit 69
+  fi
   [ "$actual" = "$expected" ] || { echo "Checksum verification failed for $file." >&2; exit 65; }
 }
 
 if [ -n "$INSTALL_ROOT" ]; then
-  actual=$(shasum -a 256 "$temporary/$filename" | awk '{print $1}')
-  expected=$(awk -v file="$filename" '$NF == file || $NF == "*" file { print $1 }' "$temporary/checksums.txt")
-  [ "$actual" = "$expected" ] || { echo "Checksum verification failed for $filename." >&2; exit 65; }
-  actual=$(shasum -a 256 "$temporary/service" | awk '{print $1}')
-  expected=$(awk '$NF == "homelab_inventory_agent" || $NF == "*homelab_inventory_agent" { print $1 }' "$temporary/checksums.txt")
-  [ "$actual" = "$expected" ] || { echo "Checksum verification failed for homelab_inventory_agent." >&2; exit 65; }
+  verify_checksum "$filename" "$temporary/$filename"
+  verify_checksum homelab_inventory_agent "$temporary/service"
 else
   verify_checksum "$filename" "$temporary/$filename"
   verify_checksum homelab_inventory_agent "$temporary/service"
