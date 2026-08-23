@@ -42,11 +42,6 @@ func parseUint(value string) (uint64, bool) {
 	return parsed, err == nil
 }
 
-func parseFloat(value string) (float64, bool) {
-	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	return parsed, err == nil
-}
-
 func parseCounter(value string) (cpuCounters, error) {
 	fields := strings.Fields(value)
 	if len(fields) != 5 {
@@ -191,73 +186,6 @@ func mergeFreeBSDMounts(filesystems []map[string]any, mounts map[string]freeBSDM
 		filesystem["readOnly"] = slices.Contains(mount.options, "ro")
 	}
 	return filesystems
-}
-
-type networkCounters struct {
-	name                                                      string
-	receivePackets, receiveErrors, receiveDrops, receiveBytes uint64
-	transmitPackets, transmitErrors, transmitBytes            uint64
-}
-
-func parseNetwork(body []byte) []networkCounters {
-	var result []networkCounters
-	seen := map[string]struct{}{}
-	lines := strings.Split(strings.ReplaceAll(string(body), "\r\n", "\n"), "\n")
-	for _, line := range lines[1:] {
-		fields := strings.Fields(line)
-		if len(fields) < 12 || !strings.HasPrefix(fields[2], "<Link#") {
-			continue
-		}
-		name := fields[0]
-		if _, duplicate := seen[name]; duplicate {
-			continue
-		}
-		values := make([]uint64, 7)
-		indexes := []int{4, 5, 6, 7, 8, 9, 10}
-		valid := true
-		for index, fieldIndex := range indexes {
-			parsed, ok := parseUint(fields[fieldIndex])
-			if !ok {
-				valid = false
-				break
-			}
-			values[index] = parsed
-		}
-		if !valid {
-			continue
-		}
-		seen[name] = struct{}{}
-		result = append(result, networkCounters{
-			name: name, receivePackets: values[0], receiveErrors: values[1], receiveDrops: values[2], receiveBytes: values[3],
-			transmitPackets: values[4], transmitErrors: values[5], transmitBytes: values[6],
-		})
-	}
-	return result
-}
-
-func parseIostat(body []byte) []map[string]any {
-	var result []map[string]any
-	lines := strings.Split(strings.ReplaceAll(string(body), "\r\n", "\n"), "\n")
-	for _, line := range lines[1:] {
-		fields := strings.Fields(line)
-		if len(fields) < 11 {
-			continue
-		}
-		reads, readsOK := parseFloat(fields[1])
-		writes, writesOK := parseFloat(fields[2])
-		readKB, readOK := parseFloat(fields[3])
-		writeKB, writeOK := parseFloat(fields[4])
-		utilization, utilizationOK := parseFloat(fields[10])
-		if !readsOK || !writesOK || !readOK || !writeOK || !utilizationOK {
-			continue
-		}
-		result = append(result, map[string]any{
-			"name": fields[0], "readOperationsPerSecond": reads, "writeOperationsPerSecond": writes,
-			"readBytesPerSecond": readKB * 1024, "writeBytesPerSecond": writeKB * 1024,
-			"utilizationPercent": utilization,
-		})
-	}
-	return result
 }
 
 func parseTemperature(value string) (float64, error) {

@@ -31,8 +31,6 @@ type Collector struct {
 	now                 func() time.Time
 	previousAt          time.Time
 	previousCPU         map[string]cpuCounters
-	previousNetwork     map[string]networkCounters
-	previousDisk        map[string]diskCounters
 	services            servicesCollector
 	serviceManager      string
 	serviceDetail       string
@@ -81,8 +79,8 @@ func New(root string, opaqueID func(string, string) string, options ...Options) 
 	serviceSelection := servicecollector.NewLinux(root)
 	return &Collector{
 		root: root, now: time.Now,
-		previousCPU: map[string]cpuCounters{}, previousNetwork: map[string]networkCounters{}, previousDisk: map[string]diskCounters{},
-		services: serviceSelection.Collector, serviceManager: serviceSelection.Manager, serviceDetail: serviceSelection.Detail, opaqueID: opaqueID,
+		previousCPU: map[string]cpuCounters{},
+		services:    serviceSelection.Collector, serviceManager: serviceSelection.Manager, serviceDetail: serviceSelection.Detail, opaqueID: opaqueID,
 		gpu:          newGPUAggregation(),
 		filesystems:  append([]string(nil), settings.Filesystems...),
 		containers:   settings.Containers,
@@ -299,121 +297,6 @@ func (collector *Collector) collectMemory(metrics *protocol.Metrics, capabilitie
 		}
 	}
 	capabilities["host.memory"] = available("procfs")
-}
-
-func (collector *Collector) collectNetwork(metrics *protocol.Metrics, capabilities map[string]protocol.Capability, elapsed time.Duration) {
-	body, err := readFile(collector.root, "proc/net/dev")
-	if err != nil {
-		capabilities["host.network"] = unavailable(err)
-		return
-	}
-	counters, err := parseNetworkCounters(body)
-	if err != nil {
-		capabilities["host.network"] = unavailable(err)
-		return
-	}
-	result := make([]map[string]any, 0, min(len(counters)+1, 128))
-	aggregate := map[string]any{"name": "all", "aggregate": true}
-	var aggregateReceive, aggregateTransmit uint64
-	var aggregateReceiveRate, aggregateTransmitRate float64
-	var aggregateHasRate bool
-	for _, current := range counters {
-		if len(result) == 127 {
-			break
-		}
-		entry := map[string]any{
-			"name": current.Name, "receiveBytes": current.ReceiveBytes, "transmitBytes": current.TransmitBytes,
-			"receivePackets": current.ReceivePackets, "transmitPackets": current.TransmitPackets,
-			"receiveErrors": current.ReceiveErrors, "transmitErrors": current.TransmitErrors,
-			"receiveDrops": current.ReceiveDrops, "transmitDrops": current.TransmitDrops,
-		}
-		if previous, exists := collector.previousNetwork[current.Name]; exists {
-			if value, valid := rate(current.ReceiveBytes, previous.ReceiveBytes, elapsed); valid {
-				entry["receiveBytesPerSecond"] = value
-				if current.Name != "lo" {
-					aggregateReceiveRate += value
-					aggregateHasRate = true
-				}
-			}
-			if value, valid := rate(current.TransmitBytes, previous.TransmitBytes, elapsed); valid {
-				entry["transmitBytesPerSecond"] = value
-				if current.Name != "lo" {
-					aggregateTransmitRate += value
-					aggregateHasRate = true
-				}
-			}
-		}
-		if current.Name != "lo" {
-			aggregateReceive += current.ReceiveBytes
-			aggregateTransmit += current.TransmitBytes
-		}
-		collector.previousNetwork[current.Name] = current
-		result = append(result, entry)
-	}
-	aggregate["receiveBytes"] = aggregateReceive
-	aggregate["transmitBytes"] = aggregateTransmit
-	if aggregateHasRate {
-		aggregate["receiveBytesPerSecond"] = aggregateReceiveRate
-		aggregate["transmitBytesPerSecond"] = aggregateTransmitRate
-	}
-	result = append([]map[string]any{aggregate}, result...)
-	metrics.Network = result
-	capabilities["host.network"] = available("procfs")
-}
-
-func (collector *Collector) collectDiskIO(metrics *protocol.Metrics, capabilities map[string]protocol.Capability, elapsed time.Duration) {
-	body, err := readFile(collector.root, "proc/diskstats")
-	if err != nil {
-		capabilities["host.disk-io"] = unavailable(err)
-		return
-	}
-	counters, err := parseDiskCounters(body)
-	if err != nil {
-		capabilities["host.disk-io"] = unavailable(err)
-		return
-	}
-	result := make([]map[string]any, 0, len(counters))
-	for _, current := range counters {
-		if len(result) == 128 {
-			break
-		}
-		entry := map[string]any{
-			"name": current.Name, "reads": current.Reads, "writes": current.Writes,
-			"readBytes": current.SectorsRead * 512, "writeBytes": current.SectorsWritten * 512,
-			"readMilliseconds": current.ReadMilliseconds, "writeMilliseconds": current.WriteMilliseconds,
-			"ioInProgress": current.IOInProgress, "ioMilliseconds": current.IOMilliseconds,
-		}
-		if previous, exists := collector.previousDisk[current.Name]; exists {
-			if value, valid := rate(current.SectorsRead*512, previous.SectorsRead*512, elapsed); valid {
-				entry["readBytesPerSecond"] = value
-			}
-			if value, valid := rate(current.SectorsWritten*512, previous.SectorsWritten*512, elapsed); valid {
-				entry["writeBytesPerSecond"] = value
-			}
-			if current.validDelta(previous) {
-				readDelta := current.Reads - previous.Reads
-				writeDelta := current.Writes - previous.Writes
-				entry["readOperationsPerSecond"] = float64(readDelta) / elapsed.Seconds()
-				entry["writeOperationsPerSecond"] = float64(writeDelta) / elapsed.Seconds()
-				if readDelta > 0 {
-					entry["readAwaitMilliseconds"] = float64(current.ReadMilliseconds-previous.ReadMilliseconds) / float64(readDelta)
-				}
-				if writeDelta > 0 {
-					entry["writeAwaitMilliseconds"] = float64(current.WriteMilliseconds-previous.WriteMilliseconds) / float64(writeDelta)
-				}
-				elapsedMilliseconds := float64(elapsed.Milliseconds())
-				if elapsedMilliseconds > 0 {
-					utilization := float64(current.IOMilliseconds-previous.IOMilliseconds) * 100 / elapsedMilliseconds
-					entry["utilizationPercent"] = min(utilization, 100)
-				}
-				entry["weightedIOMilliseconds"] = current.WeightedIOMilliseconds - previous.WeightedIOMilliseconds
-			}
-		}
-		collector.previousDisk[current.Name] = current
-		result = append(result, entry)
-	}
-	metrics.DiskIO = result
-	capabilities["host.disk-io"] = available("procfs")
 }
 
 func (collector *Collector) collectFilesystems(metrics *protocol.Metrics, capabilities map[string]protocol.Capability) {

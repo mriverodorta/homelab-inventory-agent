@@ -296,6 +296,7 @@ remove_service_group_membership() {
 
 verify_socket_access() {
   if command -v runuser >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # $1 is intentionally expanded by the child shell.
     runuser -u "$SERVICE_USER" -- /bin/sh -c 'test -r "$1" && test -w "$1"' sh "$containers_endpoint"
   else
     su -s /bin/sh -c "test -r '$containers_endpoint' && test -w '$containers_endpoint'" "$SERVICE_USER"

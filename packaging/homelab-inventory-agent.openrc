@@ -1,4 +1,6 @@
 #!/sbin/openrc-run
+# shellcheck shell=sh disable=SC2034
+# OpenRC consumes the service metadata variables below.
 
 name="Homelab Inventory Agent"
 description="Outbound-only Homelab Inventory telemetry agent"

@@ -241,10 +241,3 @@ func (collector *Collector) collectSMART(parent context.Context, now time.Time, 
 		DeviceID: collector.opaque("storage", device), Kind: "smart", State: state, CollectedAt: now, Metrics: metrics,
 	}, nil
 }
-
-func (current diskCounters) validDelta(previous diskCounters) bool {
-	return current.Reads >= previous.Reads && current.SectorsRead >= previous.SectorsRead &&
-		current.ReadMilliseconds >= previous.ReadMilliseconds && current.Writes >= previous.Writes &&
-		current.SectorsWritten >= previous.SectorsWritten && current.WriteMilliseconds >= previous.WriteMilliseconds &&
-		current.IOMilliseconds >= previous.IOMilliseconds && current.WeightedIOMilliseconds >= previous.WeightedIOMilliseconds
-}

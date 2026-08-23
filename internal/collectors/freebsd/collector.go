@@ -44,7 +44,6 @@ type Collector struct {
 	previousAt      time.Time
 	previousCPU     cpuCounters
 	previousCores   []cpuCounters
-	previousNetwork map[string]networkCounters
 	lastServicesAt  time.Time
 	cachedServices  []protocol.Service
 	serviceState    protocol.Capability
@@ -61,7 +60,7 @@ func New(options Options) *Collector {
 	}
 	return &Collector{
 		runner: options.Runner, services: options.Services, filesystems: append([]string(nil), options.Filesystems...),
-		now: time.Now, hostname: os.Hostname, previousNetwork: map[string]networkCounters{},
+		now: time.Now, hostname: os.Hostname,
 	}
 }
 
@@ -270,65 +269,6 @@ func (collector *Collector) collectFilesystems(ctx context.Context, metrics *pro
 		capabilities["host.filesystems"] = available("df; mount metadata unavailable")
 	} else {
 		capabilities["host.filesystems"] = available("df and mount")
-	}
-}
-
-func (collector *Collector) collectNetwork(ctx context.Context, elapsed time.Duration, metrics *protocol.Metrics, capabilities map[string]protocol.Capability) {
-	body, err := collector.run(ctx, "/usr/bin/netstat", "-ibdnW")
-	if err != nil {
-		capabilities["host.network"] = unavailable(err.Error())
-		return
-	}
-	counters := parseNetwork(body)
-	result := make([]map[string]any, 0, len(counters)+1)
-	aggregate := map[string]any{"name": "all", "aggregate": true}
-	var receiveBytes, transmitBytes uint64
-	var receiveRate, transmitRate float64
-	var hasRate bool
-	for _, current := range counters {
-		if len(result) == 127 {
-			break
-		}
-		entry := map[string]any{
-			"name": current.name, "receiveBytes": current.receiveBytes, "transmitBytes": current.transmitBytes,
-			"receivePackets": current.receivePackets, "transmitPackets": current.transmitPackets,
-			"receiveErrors": current.receiveErrors, "transmitErrors": current.transmitErrors, "receiveDrops": current.receiveDrops,
-		}
-		if previous, found := collector.previousNetwork[current.name]; found && elapsed > 0 && current.receiveBytes >= previous.receiveBytes && current.transmitBytes >= previous.transmitBytes {
-			entry["receiveBytesPerSecond"] = float64(current.receiveBytes-previous.receiveBytes) / elapsed.Seconds()
-			entry["transmitBytesPerSecond"] = float64(current.transmitBytes-previous.transmitBytes) / elapsed.Seconds()
-			if current.name != "lo0" {
-				receiveRate += entry["receiveBytesPerSecond"].(float64)
-				transmitRate += entry["transmitBytesPerSecond"].(float64)
-				hasRate = true
-			}
-		}
-		if current.name != "lo0" {
-			receiveBytes += current.receiveBytes
-			transmitBytes += current.transmitBytes
-		}
-		collector.previousNetwork[current.name] = current
-		result = append(result, entry)
-	}
-	aggregate["receiveBytes"], aggregate["transmitBytes"] = receiveBytes, transmitBytes
-	if hasRate {
-		aggregate["receiveBytesPerSecond"], aggregate["transmitBytesPerSecond"] = receiveRate, transmitRate
-	}
-	metrics.Network = append([]map[string]any{aggregate}, result...)
-	if len(counters) == 0 {
-		capabilities["host.network"] = unavailable("FreeBSD netstat returned no link counters")
-	}
-}
-
-func (collector *Collector) collectDisk(ctx context.Context, metrics *protocol.Metrics, capabilities map[string]protocol.Capability) {
-	body, err := collector.run(ctx, "/usr/sbin/iostat", "-Ix")
-	if err != nil {
-		capabilities["host.disk-io"] = unavailable(err.Error())
-		return
-	}
-	metrics.DiskIO = parseIostat(body)
-	if len(metrics.DiskIO) == 0 {
-		capabilities["host.disk-io"] = unavailable("FreeBSD iostat returned no device metrics")
 	}
 }
 
