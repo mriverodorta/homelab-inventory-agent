@@ -49,7 +49,7 @@ func TestReleaseBuildAndRootedInstaller(t *testing.T) {
 	}
 	for _, filename := range []string{
 		"homelab-inventory-agent-linux-amd64", "homelab-inventory-agent-linux-arm64", "homelab-inventory-agent-freebsd-amd64",
-		"homelab-inventory-agent.service", "homelab_inventory_agent", "install.sh", "install-freebsd.sh",
+		"homelab-inventory-agent.service", "homelab-inventory-agent.openrc", "homelab_inventory_agent", "install.sh", "install-freebsd.sh",
 		"uninstall.sh", "uninstall-freebsd.sh", "version.txt", "checksums.txt", "manifest.json",
 	} {
 		if fileDigest(t, filepath.Join(assets, filename)) != fileDigest(t, filepath.Join(rebuilt, filename)) {
@@ -125,6 +125,79 @@ func TestReleaseBuildAndRootedInstaller(t *testing.T) {
 		if !bytes.Contains(service, required) {
 			t.Fatalf("systemd unit is missing %q", required)
 		}
+	}
+}
+
+func TestRootedOpenRCInstallUpgradeAndUninstall(t *testing.T) {
+	root := repositoryRoot(t)
+	assets := filepath.Join(t.TempDir(), "assets")
+	if output, err := run(t, root, nil, "sh", "scripts/build-release.sh", "0.3.4-test", assets); err != nil {
+		t.Fatalf("build release: %s: %v", output, err)
+	}
+	installRoot := filepath.Join(t.TempDir(), "root")
+	environment := []string{
+		"HLI_INSTALL_ROOT=" + installRoot,
+		"HLI_ASSET_DIR=" + assets,
+		"HLI_TEST_OS=linux",
+		"HLI_TEST_ARCH=amd64",
+		"HLI_TEST_INIT=openrc",
+		"HLI_TEST_SKIP_BINARY_EXEC=1",
+	}
+	output, err := run(t, root, environment, "sh", "packaging/install.sh",
+		"--endpoint", "https://inventory.example.com", "--host-type", "server", "--host-id", "7",
+		"--enrollment-code", "one-time-code", "--version", "0.3.4-test")
+	if err != nil {
+		t.Fatalf("install OpenRC release: %s: %v", output, err)
+	}
+	servicePath := filepath.Join(installRoot, "etc/init.d/homelab-inventory-agent")
+	service, err := os.ReadFile(servicePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("#!/sbin/openrc-run"), []byte(`command_user="homelab-inventory-agent:homelab-inventory-agent"`),
+		[]byte(`supervisor="supervise-daemon"`), []byte("umask 0077"), []byte("--mode 0700"),
+	} {
+		if !bytes.Contains(service, required) {
+			t.Fatalf("OpenRC service is missing %q", required)
+		}
+	}
+	if info, err := os.Stat(servicePath); err != nil || info.Mode().Perm() != 0o555 {
+		t.Fatalf("OpenRC service mode mismatch: %v %v", info, err)
+	}
+	configPath := filepath.Join(installRoot, "etc/homelab-inventory-agent/config.json")
+	identityPath := filepath.Join(installRoot, "var/lib/homelab-inventory-agent/identity.json")
+	if err := os.WriteFile(identityPath, []byte(`{"privateKey":"preserve"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configBefore := fileDigest(t, configPath)
+	identityBefore := fileDigest(t, identityPath)
+	if output, err := run(t, root, environment, "sh", "packaging/install.sh", "--endpoint", "https://inventory.example.com", "--version", "0.3.4-test", "--upgrade"); err != nil {
+		t.Fatalf("upgrade OpenRC release: %s: %v", output, err)
+	}
+	if fileDigest(t, configPath) != configBefore || fileDigest(t, identityPath) != identityBefore {
+		t.Fatal("OpenRC upgrade changed configuration or identity")
+	}
+	if output, err := run(t, root, environment, "sh", "packaging/uninstall.sh"); err != nil {
+		t.Fatalf("uninstall OpenRC release: %s: %v", output, err)
+	}
+	if _, err := os.Stat(servicePath); !os.IsNotExist(err) {
+		t.Fatalf("OpenRC service remained after uninstall: %v", err)
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("configuration was not preserved: %v", err)
+	}
+	if _, err := os.Stat(identityPath); err != nil {
+		t.Fatalf("identity was not preserved: %v", err)
+	}
+	if output, err := run(t, root, environment, "sh", "packaging/uninstall.sh", "--purge"); err != nil {
+		t.Fatalf("purge OpenRC release: %s: %v", output, err)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("configuration remained after purge: %v", err)
+	}
+	if _, err := os.Stat(identityPath); !os.IsNotExist(err) {
+		t.Fatalf("identity remained after purge: %v", err)
 	}
 }
 

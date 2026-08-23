@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -95,6 +96,7 @@ func runtimeHandler(runtimeMarker string) http.Handler {
 func main() {
 	agentAddress := flag.String("agent-address", "127.0.0.1:8080", "agent API listen address")
 	runtimeAddress := flag.String("runtime-address", "127.0.0.1:2375", "container runtime listen address")
+	runtimeSocket := flag.String("runtime-socket", "", "optional container runtime Unix socket")
 	failureFile := flag.String("failure-file", "/tmp/hli-fail-activation", "activation failure marker")
 	heartbeatMarker := flag.String("heartbeat-marker", "/tmp/hli-heartbeat", "heartbeat marker")
 	runtimeMarker := flag.String("runtime-marker", "/tmp/hli-runtime", "runtime request marker")
@@ -102,7 +104,19 @@ func main() {
 
 	runtimeServer := &http.Server{Addr: *runtimeAddress, Handler: runtimeHandler(*runtimeMarker), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
-		if err := runtimeServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if *runtimeSocket != "" {
+			_ = os.Remove(*runtimeSocket)
+			listener, err := net.Listen("unix", *runtimeSocket)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if err := os.Chmod(*runtimeSocket, 0o660); err != nil {
+				log.Fatal(err)
+			}
+			if err := runtimeServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+				log.Fatal(err)
+			}
+		} else if err := runtimeServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	}()

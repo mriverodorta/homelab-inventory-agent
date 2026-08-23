@@ -46,6 +46,7 @@ rm -f \
   "$OUTPUT_DIRECTORY"/homelab-inventory-agent-linux-arm64 \
   "$OUTPUT_DIRECTORY"/homelab-inventory-agent-freebsd-amd64 \
   "$OUTPUT_DIRECTORY"/homelab-inventory-agent.service \
+  "$OUTPUT_DIRECTORY"/homelab-inventory-agent.openrc \
   "$OUTPUT_DIRECTORY"/homelab_inventory_agent \
   "$OUTPUT_DIRECTORY"/install.sh \
   "$OUTPUT_DIRECTORY"/install-freebsd.sh \
@@ -60,12 +61,14 @@ build linux amd64
 build linux arm64
 build freebsd amd64
 cp "$ROOT/packaging/homelab-inventory-agent.service" "$OUTPUT_DIRECTORY/homelab-inventory-agent.service"
+cp "$ROOT/packaging/homelab-inventory-agent.openrc" "$OUTPUT_DIRECTORY/homelab-inventory-agent.openrc"
 cp "$ROOT/packaging/homelab_inventory_agent" "$OUTPUT_DIRECTORY/homelab_inventory_agent"
 cp "$ROOT/packaging/install.sh" "$OUTPUT_DIRECTORY/install.sh"
 cp "$ROOT/packaging/install-freebsd.sh" "$OUTPUT_DIRECTORY/install-freebsd.sh"
 cp "$ROOT/packaging/uninstall.sh" "$OUTPUT_DIRECTORY/uninstall.sh"
 cp "$ROOT/packaging/uninstall-freebsd.sh" "$OUTPUT_DIRECTORY/uninstall-freebsd.sh"
 chmod 0644 "$OUTPUT_DIRECTORY/homelab-inventory-agent.service"
+chmod 0555 "$OUTPUT_DIRECTORY/homelab-inventory-agent.openrc"
 chmod 0555 "$OUTPUT_DIRECTORY/homelab_inventory_agent"
 chmod 0755 "$OUTPUT_DIRECTORY/install.sh" "$OUTPUT_DIRECTORY/install-freebsd.sh" "$OUTPUT_DIRECTORY/uninstall.sh" "$OUTPUT_DIRECTORY/uninstall-freebsd.sh"
 
@@ -76,9 +79,9 @@ cp "$ROOT"/protocol/v1/*.schema.json "$OUTPUT_DIRECTORY/schemas/"
 (
   cd "$OUTPUT_DIRECTORY"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum homelab-inventory-agent-* homelab-inventory-agent.service homelab_inventory_agent install.sh install-freebsd.sh uninstall.sh uninstall-freebsd.sh version.txt schemas/*.schema.json > checksums.txt
+    sha256sum homelab-inventory-agent-* homelab-inventory-agent.service homelab-inventory-agent.openrc homelab_inventory_agent install.sh install-freebsd.sh uninstall.sh uninstall-freebsd.sh version.txt schemas/*.schema.json > checksums.txt
   else
-    shasum -a 256 homelab-inventory-agent-* homelab-inventory-agent.service homelab_inventory_agent install.sh install-freebsd.sh uninstall.sh uninstall-freebsd.sh version.txt schemas/*.schema.json > checksums.txt
+    shasum -a 256 homelab-inventory-agent-* homelab-inventory-agent.service homelab-inventory-agent.openrc homelab_inventory_agent install.sh install-freebsd.sh uninstall.sh uninstall-freebsd.sh version.txt schemas/*.schema.json > checksums.txt
   fi
 
   AGENT_RELEASE_VERSION="$VERSION" AGENT_SOURCE_REVISION="$SOURCE_REVISION" ./.release-manifest checksums.txt manifest.json

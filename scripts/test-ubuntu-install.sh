@@ -29,7 +29,7 @@ docker run --rm --platform linux/amd64 \
   --volume "$temporary/test-server:/usr/local/bin/hli-agent-test-server:ro" \
   "$UBUNTU_IMAGE" \
   sh -ceu '
-    mkdir -p /test-bin
+    mkdir -p /test-bin /run/systemd/system
     cat > /test-bin/systemctl <<"SYSTEMCTL"
 #!/bin/sh
 if [ "${1:-}" = "is-active" ] && [ -f /tmp/hli-systemctl-fail-after-first ]; then

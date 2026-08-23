@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+
+name="Homelab Inventory Agent"
+description="Outbound-only Homelab Inventory telemetry agent"
+command="/usr/local/sbin/homelab-inventory-agent"
+command_args="-config /etc/homelab-inventory-agent/config.json"
+command_user="homelab-inventory-agent:homelab-inventory-agent"
+supervisor="supervise-daemon"
+pidfile="/run/homelab-inventory-agent/homelab-inventory-agent.pid"
+respawn_delay=10
+respawn_max=6
+respawn_period=120
+output_log="/dev/stdout"
+error_log="/dev/stderr"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	umask 0077
+	checkpath --directory --mode 0700 --owner homelab-inventory-agent:homelab-inventory-agent /run/homelab-inventory-agent
+}

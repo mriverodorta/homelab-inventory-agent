@@ -139,7 +139,10 @@ func (collector *OpenRC) classify(ctx context.Context, paths []string) map[strin
 		return classifications
 	}
 	arguments := append([]string{"info", "--who-owns"}, paths...)
-	body, _ := collector.runner.Run(ctx, apk, arguments...)
+	body, err := collector.runner.Run(ctx, apk, arguments...)
+	if err != nil && len(strings.TrimSpace(string(body))) == 0 {
+		return classifications
+	}
 	owners := parseOpenRCOwners(body)
 	world := readOpenRCWorld(collector.root)
 	for _, path := range paths {

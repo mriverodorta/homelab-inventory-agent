@@ -107,6 +107,7 @@ func updateFixture(t *testing.T, releaseVersion string) (Options, *fakeRunner, s
 		"homelab-inventory-agent-linux-amd64":   []byte("new-binary"),
 		"homelab-inventory-agent-freebsd-amd64": []byte("new-freebsd-binary"),
 		"homelab-inventory-agent.service":       []byte("new-service"),
+		"homelab-inventory-agent.openrc":        []byte("new-openrc-service"),
 		"homelab_inventory_agent":               []byte("new-freebsd-service"),
 	})
 	t.Cleanup(server.Close)
@@ -125,6 +126,69 @@ func updateFixture(t *testing.T, releaseVersion string) (Options, *fakeRunner, s
 		ConfigPath: configPath, CurrentVersion: "0.1.4", EffectiveUserID: func() int { return 0 },
 		platform: selected, runner: runner, lockPath: filepath.Join(directory, "update.lock"), healthChecks: 3,
 	}, runner, binaryPath, servicePath, identityPath
+}
+
+func TestLinuxPlatformSelectsOpenRCAssetsAndLifecycle(t *testing.T) {
+	selected, err := linuxPlatform("openrc", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.servicePath != "/etc/init.d/homelab-inventory-agent" || selected.serviceAsset != "homelab-inventory-agent.openrc" || selected.serviceMode != 0o555 {
+		t.Fatalf("OpenRC platform mismatch: %#v", selected)
+	}
+	if !reflect.DeepEqual(selected.stop, []string{"rc-service", "homelab-inventory-agent", "stop"}) ||
+		!reflect.DeepEqual(selected.start, []string{"rc-service", "homelab-inventory-agent", "start"}) ||
+		!reflect.DeepEqual(selected.health, []string{"rc-service", "homelab-inventory-agent", "status"}) || len(selected.reload) != 0 {
+		t.Fatalf("OpenRC lifecycle mismatch: %#v", selected)
+	}
+}
+
+func TestLinuxManagerDetectionFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		directories map[string]bool
+		commands    map[string]bool
+		want        string
+		wantError   bool
+	}{
+		{name: "systemd", directories: map[string]bool{"/run/systemd/system": true}, commands: map[string]bool{"systemctl": true}, want: "systemd"},
+		{name: "openrc", directories: map[string]bool{"/run/openrc": true}, commands: map[string]bool{"rc-service": true, "rc-update": true}, want: "openrc"},
+		{name: "ambiguous", directories: map[string]bool{"/run/systemd/system": true, "/run/openrc": true}, commands: map[string]bool{"systemctl": true, "rc-service": true, "rc-update": true}, wantError: true},
+		{name: "missing", directories: map[string]bool{}, commands: map[string]bool{}, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, err := detectLinuxServiceManager(func(path string) bool { return test.directories[path] }, func(name string) bool { return test.commands[name] })
+			if (err != nil) != test.wantError || manager != test.want {
+				t.Fatalf("manager=%q err=%v", manager, err)
+			}
+		})
+	}
+}
+
+func TestRunUsesOpenRCServiceTransaction(t *testing.T) {
+	options, runner, binaryPath, servicePath, _ := updateFixture(t, "0.3.4")
+	options.platform = &platform{
+		os: "linux", arch: "amd64", binaryPath: binaryPath, servicePath: servicePath,
+		binaryAsset: "homelab-inventory-agent-linux-amd64", serviceAsset: "homelab-inventory-agent.openrc",
+		stop: []string{"rc-service", "homelab-inventory-agent", "stop"}, start: []string{"rc-service", "homelab-inventory-agent", "start"},
+		health: []string{"rc-service", "homelab-inventory-agent", "status"}, serviceMode: 0o555,
+	}
+	if _, err := Run(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	if body, _ := os.ReadFile(servicePath); string(body) != "new-openrc-service" {
+		t.Fatalf("OpenRC service was not installed: %q", body)
+	}
+	want := [][]string{
+		{"rc-service", "homelab-inventory-agent", "stop"},
+		{"rc-service", "homelab-inventory-agent", "start"},
+		{"rc-service", "homelab-inventory-agent", "status"},
+		{"rc-service", "homelab-inventory-agent", "status"},
+		{"rc-service", "homelab-inventory-agent", "status"},
+	}
+	if !reflect.DeepEqual(runner.commands, want) {
+		t.Fatalf("OpenRC service transaction mismatch: %#v", runner.commands)
+	}
 }
 
 func TestRunUsesFreeBSDServiceTransaction(t *testing.T) {

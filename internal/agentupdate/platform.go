@@ -43,23 +43,63 @@ type platform struct {
 	serviceMode  os.FileMode
 }
 
+func linuxPlatform(manager, arch string) (platform, error) {
+	if arch != "amd64" && arch != "arm64" {
+		return platform{}, fmt.Errorf("unsupported Linux architecture %s", arch)
+	}
+	base := platform{
+		os: "linux", arch: arch, binaryPath: "/usr/local/sbin/homelab-inventory-agent",
+		binaryAsset: "homelab-inventory-agent-linux-" + arch,
+	}
+	switch manager {
+	case "systemd":
+		base.servicePath = "/etc/systemd/system/homelab-inventory-agent.service"
+		base.serviceAsset = "homelab-inventory-agent.service"
+		base.stop = []string{"systemctl", "stop", "homelab-inventory-agent.service"}
+		base.reload = []string{"systemctl", "daemon-reload"}
+		base.start = []string{"systemctl", "restart", "homelab-inventory-agent.service"}
+		base.health = []string{"systemctl", "is-active", "--quiet", "homelab-inventory-agent.service"}
+		base.serviceMode = 0o644
+	case "openrc":
+		base.servicePath = "/etc/init.d/homelab-inventory-agent"
+		base.serviceAsset = "homelab-inventory-agent.openrc"
+		base.stop = []string{"rc-service", "homelab-inventory-agent", "stop"}
+		base.start = []string{"rc-service", "homelab-inventory-agent", "start"}
+		base.health = []string{"rc-service", "homelab-inventory-agent", "status"}
+		base.serviceMode = 0o555
+	default:
+		return platform{}, fmt.Errorf("unsupported Linux service manager %s", manager)
+	}
+	return base, nil
+}
+
+func detectLinuxServiceManager(directoryExists func(string) bool, commandExists func(string) bool) (string, error) {
+	systemd := directoryExists("/run/systemd/system") && commandExists("systemctl")
+	openrc := directoryExists("/run/openrc") && commandExists("rc-service") && commandExists("rc-update")
+	if systemd == openrc {
+		if systemd {
+			return "", errors.New("multiple supported Linux service managers detected")
+		}
+		return "", errors.New("no supported Linux service manager detected")
+	}
+	if systemd {
+		return "systemd", nil
+	}
+	return "openrc", nil
+}
+
 func defaultPlatform() (platform, error) {
 	arch := runtime.GOARCH
 	switch runtime.GOOS {
 	case "linux":
-		if arch != "amd64" && arch != "arm64" {
-			return platform{}, fmt.Errorf("unsupported Linux architecture %s", arch)
+		manager, err := detectLinuxServiceManager(
+			func(path string) bool { info, statErr := os.Stat(path); return statErr == nil && info.IsDir() },
+			func(name string) bool { _, lookErr := exec.LookPath(name); return lookErr == nil },
+		)
+		if err != nil {
+			return platform{}, err
 		}
-		return platform{
-			os: "linux", arch: arch,
-			binaryPath: "/usr/local/sbin/homelab-inventory-agent", servicePath: "/etc/systemd/system/homelab-inventory-agent.service",
-			binaryAsset: "homelab-inventory-agent-linux-" + arch, serviceAsset: "homelab-inventory-agent.service",
-			stop:        []string{"systemctl", "stop", "homelab-inventory-agent.service"},
-			reload:      []string{"systemctl", "daemon-reload"},
-			start:       []string{"systemctl", "restart", "homelab-inventory-agent.service"},
-			health:      []string{"systemctl", "is-active", "--quiet", "homelab-inventory-agent.service"},
-			serviceMode: 0o644,
-		}, nil
+		return linuxPlatform(manager, arch)
 	case "freebsd":
 		if arch != "amd64" {
 			return platform{}, fmt.Errorf("unsupported FreeBSD architecture %s", arch)
