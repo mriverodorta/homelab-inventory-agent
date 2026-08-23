@@ -2,8 +2,13 @@
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
-ALPINE_IMAGE='alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6'
 VERSION=${1:-0.0.0-alpine-test}
+ARCH=${2:-amd64}
+case "$ARCH" in
+  amd64) ALPINE_IMAGE='alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6' ;;
+  arm64) ALPINE_IMAGE='alpine:3.22@sha256:2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37' ;;
+  *) echo "usage: $0 [version] [amd64|arm64]" >&2; exit 64 ;;
+esac
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/homelab-inventory-agent-alpine.XXXXXX")
 
 cleanup() {
@@ -20,10 +25,10 @@ mkdir -p "$assets"
 "$ROOT/scripts/build-release.sh" "$VERSION" "$assets"
 (
   cd "$ROOT"
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$temporary/test-server" ./internal/packaging/testfixture
+  CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags='-s -w' -o "$temporary/test-server" ./internal/packaging/testfixture
 )
 
-docker run --rm --platform linux/amd64 \
+docker run --rm --platform "linux/$ARCH" \
   --env HLI_TEST_VERSION="$VERSION" \
   --volume "$assets:/assets:ro" \
   --volume "$temporary/test-server:/usr/local/bin/hli-agent-test-server:ro" \

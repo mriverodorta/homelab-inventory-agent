@@ -31,6 +31,8 @@ jobs:
         run: shellcheck scripts/*.sh packaging/*.sh
       - name: Test Ubuntu installation transaction
         run: scripts/test-ubuntu-install.sh 0.0.0-ci
+      - name: Test Alpine OpenRC installation transaction
+        run: scripts/test-alpine-install.sh 0.0.0-ci amd64
       - name: Build release artifacts twice
         run: |
           scripts/build-release.sh 0.0.0-ci dist-a
@@ -41,3 +43,14 @@ jobs:
           name: agent-ci-binaries
           path: dist-a/
           if-no-files-found: error
+
+  verify-alpine-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Test Alpine OpenRC installation transaction on ARM64
+        run: scripts/test-alpine-install.sh 0.0.0-ci arm64

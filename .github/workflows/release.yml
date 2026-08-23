@@ -11,7 +11,26 @@ permissions:
   attestations: write
 
 jobs:
+  alpine-install:
+    strategy:
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Test Alpine OpenRC installation transaction
+        run: scripts/test-alpine-install.sh "${GITHUB_REF_NAME#v}" "${{ matrix.architecture }}"
+
   release:
+    needs: alpine-install
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
@@ -40,6 +59,8 @@ jobs:
           diff -rq dist dist-rebuilt
       - name: Test Ubuntu installation transaction
         run: scripts/test-ubuntu-install.sh "${{ steps.version.outputs.value }}"
+      - name: Test Alpine OpenRC installation transaction
+        run: scripts/test-alpine-install.sh "${{ steps.version.outputs.value }}" amd64
       - uses: anchore/sbom-action@v0.24.0
         with:
           path: dist
