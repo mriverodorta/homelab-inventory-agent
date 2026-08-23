@@ -73,6 +73,9 @@ func uint(value uint64) string {
 func TestCollectorReadsProcAndSysfsWithoutInventingInitialRates(t *testing.T) {
 	root := t.TempDir()
 	writeBaseFixtures(t, root, 100)
+	if err := os.MkdirAll(filepath.Join(root, "run/openrc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	collector := New(root, nil)
 	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
 	collector.now = func() time.Time { return now }
@@ -96,7 +99,7 @@ func TestCollectorReadsProcAndSysfsWithoutInventingInitialRates(t *testing.T) {
 			t.Fatalf("memory counter %s mismatch: %#v", key, first.Metrics.Memory)
 		}
 	}
-	if first.Metrics.System["distribution"] != "example" || first.Metrics.CPU["model"] != "Example CPU" {
+	if first.Metrics.System["distribution"] != "example" || first.Metrics.System["initSystem"] != "openrc" || first.Metrics.CPU["model"] != "Example CPU" {
 		t.Fatalf("static host profile mismatch: system=%#v cpu=%#v", first.Metrics.System, first.Metrics.CPU)
 	}
 	if len(first.Metrics.Sensors) != 1 || first.Metrics.Sensors[0]["temperatureC"] != float64(42) {

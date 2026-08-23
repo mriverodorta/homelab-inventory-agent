@@ -5,12 +5,32 @@ package linux
 import (
 	"bufio"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 
 	protocol "github.com/mriverodorta/homelab-inventory-agent/protocol/v1"
 )
+
+func detectInitSystem(root string) string {
+	systemd := false
+	openrc := false
+	if info, err := os.Stat(filepath.Join(root, "run/systemd/system")); err == nil && info.IsDir() {
+		systemd = true
+	}
+	if info, err := os.Stat(filepath.Join(root, "run/openrc")); err == nil && info.IsDir() {
+		openrc = true
+	}
+	if systemd == openrc {
+		return "unknown"
+	}
+	if systemd {
+		return "systemd"
+	}
+	return "openrc"
+}
 
 func parseOSRelease(body []byte) map[string]string {
 	result := map[string]string{}
@@ -89,7 +109,7 @@ func parseZFSARC(body []byte) (uint64, error) {
 }
 
 func (collector *Collector) collectSystem(metrics *protocol.Metrics, capabilities map[string]protocol.Capability) {
-	system := map[string]any{"operatingSystem": "linux", "architecture": runtime.GOARCH}
+	system := map[string]any{"operatingSystem": "linux", "architecture": runtime.GOARCH, "initSystem": detectInitSystem(collector.root)}
 	if body, err := readFile(collector.root, "proc/sys/kernel/osrelease"); err == nil {
 		system["kernel"] = strings.TrimSpace(string(body))
 	}

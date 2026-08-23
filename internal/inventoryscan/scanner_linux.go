@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -17,28 +18,63 @@ func NewScanner() Scanner {
 	return fixedScanner{runner: command.Exec{MaxOutput: 1 << 20}, scan: scanLinux}
 }
 
+func executableFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+}
+
+func firstTrustedExecutable(candidates []string, exists func(string) bool) string {
+	for _, candidate := range candidates {
+		if candidate != "" && strings.HasPrefix(candidate, "/") && exists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func scanLinux(ctx context.Context, runner command.Runner) ([]protocol.HardwareComponent, error) {
-	dmi, err := runBounded(ctx, runner, 10*time.Second, "/usr/sbin/dmidecode", "--type", "0,1,2,3,4,16,17,39")
-	if err != nil {
-		return nil, err
+	return scanLinuxWithTools(ctx, runner, linuxTools{
+		dmidecode: firstTrustedExecutable([]string{"/usr/sbin/dmidecode", "/sbin/dmidecode", "/usr/bin/dmidecode"}, executableFile),
+		lsblk:     firstTrustedExecutable([]string{"/usr/bin/lsblk", "/bin/lsblk"}, executableFile),
+		lspci:     firstTrustedExecutable([]string{"/usr/bin/lspci", "/usr/sbin/lspci", "/sbin/lspci"}, executableFile),
+		ip:        firstTrustedExecutable([]string{"/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"}, executableFile),
+	})
+}
+
+type linuxTools struct {
+	dmidecode string
+	lsblk     string
+	lspci     string
+	ip        string
+}
+
+func scanLinuxWithTools(ctx context.Context, runner command.Runner, tools linuxTools) ([]protocol.HardwareComponent, error) {
+	components := []protocol.HardwareComponent{}
+	if tools.dmidecode != "" {
+		if dmi, err := runBounded(ctx, runner, 10*time.Second, tools.dmidecode, "--type", "0,1,2,3,4,16,17,39"); err == nil {
+			components = append(components, parseDMI(dmi)...)
+		}
 	}
-	components := parseDMI(dmi)
-	lsblk, err := runBounded(ctx, runner, 10*time.Second, "/usr/bin/lsblk", "--json", "--bytes", "--output", strings.Join([]string{
-		"NAME", "KNAME", "PATH", "SIZE", "TYPE", "MODEL", "VENDOR", "SERIAL", "WWN", "TRAN", "ROTA",
-		"PTTYPE", "PTUUID", "FSTYPE", "FSVER", "LABEL", "UUID", "MOUNTPOINTS", "PKNAME", "MAJ:MIN",
-		"RM", "RO", "DISC-GRAN", "DISC-MAX", "DISC-ZERO", "PARTTYPE", "PARTTYPENAME", "PARTUUID",
-		"PARTLABEL", "START",
-	}, ","))
-	if err == nil {
-		components = append(components, parseLSBLK(lsblk)...)
+	if tools.lsblk != "" {
+		lsblk, err := runBounded(ctx, runner, 10*time.Second, tools.lsblk, "--json", "--bytes", "--output", strings.Join([]string{
+			"NAME", "KNAME", "PATH", "SIZE", "TYPE", "MODEL", "VENDOR", "SERIAL", "WWN", "TRAN", "ROTA",
+			"PTTYPE", "PTUUID", "FSTYPE", "FSVER", "LABEL", "UUID", "MOUNTPOINTS", "PKNAME", "MAJ:MIN",
+			"RM", "RO", "DISC-GRAN", "DISC-MAX", "DISC-ZERO", "PARTTYPE", "PARTTYPENAME", "PARTUUID",
+			"PARTLABEL", "START",
+		}, ","))
+		if err == nil {
+			components = append(components, parseLSBLK(lsblk)...)
+		}
 	}
-	lspci, err := runBounded(ctx, runner, 10*time.Second, "/usr/bin/lspci", "-Dmmnn")
-	if err == nil {
-		components = append(components, parseLineRecords("pci-device", lspci, 256)...)
+	if tools.lspci != "" {
+		if lspci, err := runBounded(ctx, runner, 10*time.Second, tools.lspci, "-Dmmnn"); err == nil {
+			components = append(components, parseLineRecords("pci-device", lspci, 256)...)
+		}
 	}
-	links, err := runBounded(ctx, runner, 10*time.Second, "/usr/sbin/ip", "-details", "-json", "link", "show")
-	if err == nil {
-		components = append(components, parseLinuxLinks(links)...)
+	if tools.ip != "" {
+		if links, err := runBounded(ctx, runner, 10*time.Second, tools.ip, "-details", "-json", "link", "show"); err == nil {
+			components = append(components, parseLinuxLinks(links)...)
+		}
 	}
 	if len(components) == 0 {
 		return nil, fmt.Errorf("no supported hardware was detected")
