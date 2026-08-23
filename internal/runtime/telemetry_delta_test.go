@@ -80,3 +80,20 @@ func TestCompactHeartbeatPreservesServiceManagerIdentity(t *testing.T) {
 		t.Fatalf("rc.d service identity was not used: %#v", state.Families["services"].Hashes)
 	}
 }
+
+func TestCompactHeartbeatPreservesOpenRCServiceManagerIdentity(t *testing.T) {
+	at := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	heartbeat := compactFixture(at)
+	heartbeat.Services = []protocol.Service{{Manager: "openrc", Name: "docker", ActiveState: "active"}}
+
+	first, state, err := buildCompactHeartbeat(heartbeat, emptyTelemetrySyncState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.State.Services == nil || len(first.State.Services.Changed) != 1 || first.State.Services.Changed[0].Manager != "openrc" {
+		t.Fatalf("OpenRC service manager was not preserved: %#v", first.State.Services)
+	}
+	if _, exists := state.Families["services"].Hashes["openrc\x00docker"]; !exists {
+		t.Fatalf("OpenRC service identity was not used: %#v", state.Families["services"].Hashes)
+	}
+}

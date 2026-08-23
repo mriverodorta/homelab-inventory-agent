@@ -163,12 +163,17 @@ func TestServiceCollectionUsesContractCadenceAndCachedHeartbeatState(t *testing.
 	collector := New(root, nil)
 	services := &fakeServicesCollector{}
 	collector.services = services
+	collector.serviceManager = "openrc"
+	collector.serviceDetail = "OpenRC"
 	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
 	collector.now = func() time.Time { return now }
 	contract := protocol.Contract{Collection: protocol.CollectionPolicy{ServiceIntervalSeconds: 600}}
 	first, err := collector.Collect(context.Background(), contract)
 	if err != nil || services.calls != 1 || len(first.Services) != 1 {
 		t.Fatalf("initial service collection mismatch: calls=%d services=%#v err=%v", services.calls, first.Services, err)
+	}
+	if first.Services[0].Manager != "openrc" || first.Capabilities["host.services"].Detail != "OpenRC" {
+		t.Fatalf("service manager metadata mismatch: services=%#v capability=%#v", first.Services, first.Capabilities["host.services"])
 	}
 	now = now.Add(time.Minute)
 	second, err := collector.Collect(context.Background(), contract)

@@ -12,6 +12,7 @@ import (
 const LegacyBundleDigest = "6991de825d245d5906d64a137f51fd52ed820c97c5f093a0935434a0130c06ec"
 const IntermediateBundleDigest = "97ea85ea215e8d35d2cf8c70c24d715d79e092391dd57f70b6b54ef9717e7495"
 const PreviousBundleDigest = "3179a40f31801dee2edaf890485e0e360680684c2ef9ba6e01f6961bacca0106"
+const PreOpenRCBundleDigest = "0e1749bf18a921f89334410d61ce95ebd0d001c6ed30ef6ae4655c90e1180554"
 
 //go:embed *.schema.json
 var schemaFiles embed.FS
@@ -61,7 +62,7 @@ func IsCompatibleBundleDigest(value string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return value == current || value == PreviousBundleDigest || value == IntermediateBundleDigest || value == LegacyBundleDigest, nil
+	return value == current || value == PreOpenRCBundleDigest || value == PreviousBundleDigest || value == IntermediateBundleDigest || value == LegacyBundleDigest, nil
 }
 
 func SupportsMonitoringPolicy(value string) (bool, error) {
@@ -69,7 +70,7 @@ func SupportsMonitoringPolicy(value string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return value == current || value == PreviousBundleDigest || value == IntermediateBundleDigest, nil
+	return value == current || value == PreOpenRCBundleDigest || value == PreviousBundleDigest || value == IntermediateBundleDigest, nil
 }
 
 func SupportsCompactTelemetry(value string) (bool, error) {
@@ -77,5 +78,5 @@ func SupportsCompactTelemetry(value string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return value == current, nil
+	return value == current || value == PreOpenRCBundleDigest, nil
 }

@@ -34,6 +34,8 @@ type Collector struct {
 	previousNetwork     map[string]networkCounters
 	previousDisk        map[string]diskCounters
 	services            servicesCollector
+	serviceManager      string
+	serviceDetail       string
 	lastServicesAt      time.Time
 	cachedServices      []protocol.Service
 	serviceCapability   protocol.Capability
@@ -76,10 +78,11 @@ func New(root string, opaqueID func(string, string) string, options ...Options) 
 	if settings.SMARTCTLPath == "" {
 		settings.SMARTCTLPath = findSMARTCTL()
 	}
+	serviceSelection := servicecollector.NewLinux(root)
 	return &Collector{
 		root: root, now: time.Now,
 		previousCPU: map[string]cpuCounters{}, previousNetwork: map[string]networkCounters{}, previousDisk: map[string]diskCounters{},
-		services: servicecollector.NewSystemd(), opaqueID: opaqueID,
+		services: serviceSelection.Collector, serviceManager: serviceSelection.Manager, serviceDetail: serviceSelection.Detail, opaqueID: opaqueID,
 		gpu:          newGPUAggregation(),
 		filesystems:  append([]string(nil), settings.Filesystems...),
 		containers:   settings.Containers,
@@ -174,10 +177,10 @@ func (collector *Collector) Collect(ctx context.Context, contract protocol.Contr
 			collector.serviceCapability = unavailable(err)
 		} else {
 			for index := range services {
-				services[index].Manager = "systemd"
+				services[index].Manager = collector.serviceManager
 			}
 			collector.cachedServices = services
-			collector.serviceCapability = available("systemd")
+			collector.serviceCapability = available(collector.serviceDetail)
 		}
 	}
 	if collector.serviceCapability.State != "" {
