@@ -65,7 +65,7 @@ jobs:
         run: scripts/test-ubuntu-install.sh "${{ steps.version.outputs.value }}"
       - name: Test Alpine OpenRC installation transaction
         run: scripts/test-alpine-install.sh "${{ steps.version.outputs.value }}" amd64
-      - uses: anchore/sbom-action@v0.24.0
+      - uses: anchore/sbom-action@v0.24.2
         with:
           path: dist
           format: spdx-json
