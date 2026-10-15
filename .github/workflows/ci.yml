@@ -40,7 +40,7 @@ jobs:
           scripts/build-release.sh 0.0.0-ci dist-a
           scripts/build-release.sh 0.0.0-ci dist-b
           diff -rq dist-a dist-b
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: agent-ci-binaries
           path: dist-a/
